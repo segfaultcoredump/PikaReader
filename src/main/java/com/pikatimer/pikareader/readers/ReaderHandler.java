@@ -135,7 +135,12 @@ public class ReaderHandler {
         readers.values().stream().forEach(r -> {
             Thread.startVirtualThread(() -> {
                 r.startReading();
-                latch.countDown();
+                if (r.isReading())
+                    latch.countDown();
+                else {
+                    r.startReading();
+                    latch.countDown();
+                }
             });
         });
         try {

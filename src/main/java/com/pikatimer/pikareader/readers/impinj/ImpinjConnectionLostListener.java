@@ -44,7 +44,7 @@ public class ImpinjConnectionLostListener implements ConnectionLostListener {
 
         logger.info("Attempting to reconnect to {}...", impinjReader.getAddress());
 
-        Integer retryLimit = 10;
+        Integer retryLimit = 50;
 
         while (retryLimit-- > 0 && !impinjReader.isConnected()) {
             try {

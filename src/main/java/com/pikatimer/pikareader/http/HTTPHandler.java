@@ -150,7 +150,7 @@ public class HTTPHandler {
                 tr.setPeakRSSI(0.0);
                 List<TagRead> trigger = new ArrayList<>();
                 trigger.add(tr);
-                TagReadRouter.getInstance().processTagReads(trigger);
+                TagReadRouter.getInstance().routeTagReads(trigger);
                 ctx.json(tr.toJSON());
             });
 

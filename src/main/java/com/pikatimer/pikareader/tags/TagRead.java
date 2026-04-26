@@ -28,6 +28,7 @@ import org.json.JSONObject;
 public class TagRead implements Comparable<TagRead> {
 
     protected String hexEPC;
+    protected String chip;
     //protected String readerIP;
     protected LocalDateTime timestamp;
     protected Double rssi;
@@ -40,14 +41,32 @@ public class TagRead implements Comparable<TagRead> {
 
     public void setEPC(String epc) {
         hexEPC = epc;
+        chip = getEPCDecimal(); // default
     }
 
     public String getEPC() {
         return hexEPC;
     }
+    
+    public String getChip(){
+        return chip;
+    }
+    
+    public void setChip(String c){
+        chip = c;
+    }
 
     public String getEPCDecimal() {
         return new BigInteger(hexEPC, 16).toString();
+    }
+    
+    public String getEPCHex(){
+        // strip leading 0 but return 0 if all 0's
+        int i = 0;
+        while (i < hexEPC.length() - 1 && hexEPC.charAt(i) == '0') {
+            i++;
+        }
+        return hexEPC.substring(i);
     }
 
     public void setTimestamp(LocalDateTime tagTimestamp) {
@@ -88,7 +107,8 @@ public class TagRead implements Comparable<TagRead> {
 
     public JSONObject toJSONObject() {
         JSONObject msg = new JSONObject();
-        msg.put("chip", getEPCDecimal());
+        msg.put("chip", chip);
+        msg.put("epc", getEPCHex());
         msg.put("timestamp", getTimestamp().format(formatter));
         msg.put("reader", readerID);
         msg.put("antenna", antennaPortNumber);
@@ -107,7 +127,9 @@ public class TagRead implements Comparable<TagRead> {
         antennaPortNumber = o.getInt("antenna");
         rssi = o.optDouble("rssi", 0.0);
         timestamp = LocalDateTime.parse(o.getString("timestamp"), formatter);
-        hexEPC = new BigInteger(o.getString("chip"), 10).toString(16); 
+        //hexEPC = new BigInteger(o.getString("epc"), 10).toString(16); 
+        hexEPC = o.optString("epc",o.getString("chip"));
+        chip = o.getString("chip");
         tzOffset = o.optString("tz", "Z");
         epochMilli = o.optLong("epochMilli");
     }

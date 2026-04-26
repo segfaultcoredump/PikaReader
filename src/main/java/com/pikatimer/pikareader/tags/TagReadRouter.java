@@ -58,10 +58,21 @@ public class TagReadRouter implements Runnable {
 
     @Override
     public void run() {
-
+        Boolean hexChip = false; 
+        
+        if (pikaConfig.getStringValue("ChipFormat").toUpperCase().startsWith("H")) hexChip = true;
+        
         try {
             while (true) {
                 Collection<TagRead> tr = tagQueue.take();
+                
+                
+                //If they want the chip in hex, set it now
+                if (hexChip){
+                    tr.forEach(t -> {
+                        t.setChip(t.getEPCHex());
+                    });
+                }
                              
                 // send a copy to the DB
                 tagDB.addReads(tr);
@@ -74,10 +85,12 @@ public class TagReadRouter implements Runnable {
             }
         } catch (InterruptedException ex) {
             logger.trace("Exiting " + tagRoutingThread.getName());
+        } finally {
+            tagRoutingThread = null; 
         }
     }
 
-    public void processTagReads(Collection<TagRead> tr) {
+    public void routeTagReads(Collection<TagRead> tr) {
         logger.trace("Entering TagReadRouter::processTagReads");
 
         // Start the tag processing thread

@@ -26,10 +26,10 @@ import java.util.Map;
  */
 public enum ImpinjPowerLevels {
 
-    LOW("Low", 23.0),
-    MEDIUM("Medium", 27.0),
-    HIGH("High", 30.0),
-    MAX("Max", 32.5);
+    LOW("Low", 24.0), // ~0.25w
+    MEDIUM("Medium", 27.0), // ~0.5w
+    HIGH("High", 30.0), // ~1.0w
+    MAX("Max", 32.5); // ~1.75w but it depends on the reader's max
 
     private final Double dBm;
     private final String level;

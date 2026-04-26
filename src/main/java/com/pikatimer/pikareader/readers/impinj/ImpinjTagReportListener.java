@@ -61,7 +61,7 @@ public class ImpinjTagReportListener implements TagReportListener {
 
             tr.setReaderID(readerID);
             
-            logger.trace("Tag Read: {} at {}",  t.getEpc().toHexString(), t.getLastSeenTime().getLocalDateTime().toInstant().toString());
+            logger.trace("Tag Read: {} at {} on port {}",  t.getEpc().toHexString(), t.getLastSeenTime().getLocalDateTime().toInstant().toString(), t.getAntennaPortNumber());
 
             /*
             System.out.print(" EPC: " + t.getEpc().toHexString());
@@ -73,6 +73,7 @@ public class ImpinjTagReportListener implements TagReportListener {
             System.out.print(" Chip #: " + epc.toString());
              */
             tr.setEPC(t.getEpc().toHexString());
+            
 //            tr.setReaderIP(reader.getAddress());
 
             // Save the antenna port number

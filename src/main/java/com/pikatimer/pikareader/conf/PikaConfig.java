@@ -74,6 +74,8 @@ public class PikaConfig {
 
     private synchronized void loadConfig() {
         logger.trace("Starting PikaConfig::loadConfig()");
+        
+        
         JSONObject root= new JSONObject();
         try {
             // does the config file exist?
@@ -161,6 +163,12 @@ public class PikaConfig {
         }
 
         logger.info("PikaReader Timezone: using zoneID " + zoneId.toString() + " Offset: " + ZonedDateTime.now(zoneId).getOffset());
+        
+        // Do they want the "chip" in hex or decimal?
+        if (configRoot.optString("ChipFormat").isBlank()){
+            putValue("ChipFormat","Decimal");
+            
+        }
 
         logger.trace("Exiting PikaConfig::loadConfig()");
     }

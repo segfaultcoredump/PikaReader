@@ -89,7 +89,7 @@ public class StatusHandler {
             statusReport.put("reading", readerHandler.isReading());
             statusReport.put("totalReads", totalReads);
             if (lastChipRead != null) {
-                statusReport.put("lastChipRead", lastChipRead.getEPCDecimal());
+                statusReport.put("lastChipRead", lastChipRead.getChip());
                 statusReport.put("lastChipReadTime", lastChipRead.getTimestamp().format(formatter));
             }
             statusReport.put("unitID", pikaConfig.getStringValue("UnitID"));
@@ -163,8 +163,13 @@ public class StatusHandler {
                 JSONObject stats = new JSONObject();
 
                 antennaReadStrengthMap.get(a).keySet().stream().sorted().forEach(k -> {
-                    portStatus.put(readerMap.get("Reader " + a).getAntennaStatus().get(k));
-                    readStats.put(antennaReadStrengthMap.get(a).get(k));
+                    String stat = readerMap.get("Reader " + a).getAntennaStatus().get(k);
+                    portStatus.put(stat);
+                    
+                    // Some readers have phantom cross reads that screw up the stats
+                    if ("Connected".endsWith(stat)) readStats.put(antennaReadStrengthMap.get(a).get(k));
+                    else readStats.put(-100);
+                    
                     portLabels.put("Port " + k);
                 });
                 stats.put("labels", portLabels);

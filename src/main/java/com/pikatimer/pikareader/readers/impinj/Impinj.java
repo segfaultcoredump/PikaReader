@@ -34,7 +34,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.logging.Level;
+import java.util.concurrent.Semaphore;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,8 +57,12 @@ public class Impinj implements RFIDReader {
     private String readerIP;
     private Integer readerID;
     private Boolean reading = false;
+    private Boolean connected = false;
+    
+    private Semaphore reader_command_semaphore = new Semaphore(1);
 
     private Integer antennaCount = 0;
+    private long lastAntennaUpdateTS = 0L;
 
     public Impinj() {
         readerID = -1;
@@ -146,14 +150,19 @@ public class Impinj implements RFIDReader {
 
     @Override
     public Boolean isConnected() {
-        return reader.isConnected();
+        
+        if (!reader.isConnected()) Thread.startVirtualThread(() -> this.connect());
+        
+        return connected;
     }
 
     protected Boolean connect() {
-        try {
+        
 
-            //reader = new ImpinjReader();
-            if (!reader.isConnected()) {
+        //reader = new ImpinjReader();
+        if (!reader.isConnected() && reader_command_semaphore.tryAcquire()) {
+                
+            try {    
                 logger.info("Connecting to {}", readerIP);
                 reader.connect(readerIP);
 
@@ -245,8 +254,8 @@ public class Impinj implements RFIDReader {
                 
                
                 reader.setTagReportListener(new ImpinjTagReportListener(readerID));
-                reader.setAntennaChangeListener(new ImpinjAntennaChangeListener(this));
 
+                
                 reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
                     try {
                         Boolean enabled = antennas.getAntenna(a.getPortNumber()).isEnabled();
@@ -265,16 +274,20 @@ public class Impinj implements RFIDReader {
                 // set up a listener for connection Lost
                 reader.setConnectionLostListener(new ImpinjConnectionLostListener(this));
 
+                connected = true;
+                
+
+            } catch (OctaneSdkException ex) {
+                logger.error("OctaneSdkExcepton connecting to {} with stack trace {}", readerIP, ex.getMessage());
+                reader.disconnect();
+            } catch (Exception ex) {
+                System.out.println(ex.getMessage());
+                logger.error("Impinj Connect Exception", ex);
+            } finally {
+                reader_command_semaphore.release();
             }
-
-        } catch (OctaneSdkException ex) {
-            logger.error("OctaneSdkExcepton connecting to {} with stack trace {}", readerIP, ex.getMessage());
-            reader.disconnect();
-        } catch (Exception ex) {
-            System.out.println(ex.getMessage());
-            logger.error("Impinj Connect Exception", ex);
         }
-
+        
         return (reader != null && reader.isConnected());
 
     }
@@ -291,15 +304,17 @@ public class Impinj implements RFIDReader {
         }
 
         try {
-
+            reader_command_semaphore.acquire();
             if (connect()) {
 
+                
                 // Make sure the reader's time is correct
                 setClock();
 
                 logger.info("Starting reader {}", reader.getAddress());
                 reader.start();
                 reading = true;
+                
 
             }
 
@@ -308,6 +323,8 @@ public class Impinj implements RFIDReader {
         } catch (Exception ex) {
             System.out.println(ex.getMessage());
             logger.error("OctaneSdkExcepton", ex);
+        } finally {
+            reader_command_semaphore.release();
         }
 
         logger.trace("Exiting Impinj::startReading()");
@@ -356,6 +373,37 @@ public class Impinj implements RFIDReader {
 
     @Override
     public Map<Integer, String> getAntennaStatus() {
+        long now = Instant.now().getEpochSecond();
+        
+        // The AntennaChangeListener is not fired when it is not in read mode
+        // So we will force a refresh 5 seconds
+        logger.debug("Starting getAntennaStatus(): {}",lastAntennaUpdateTS);
+        
+        
+        if ((now - lastAntennaUpdateTS) > 5 && !reading && connected && reader_command_semaphore.tryAcquire()){
+            try {
+                reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
+                    try {                        
+                        logger.info(" Antenna Status: Reader: {} Port: {} Connected: {} ", readerID, a.getPortNumber(), a.isConnected());
+                        String s = a.isConnected() ? "Connected" : "Disconnected";
+                        Integer port = (int) a.getPortNumber();
+                        if (! "Disabled".equals(antennaStatus.get(port)) && ! s.equals(antennaStatus.get(port))) {
+                            logger.info("Antenna status changed!");
+                            antennaStatus.put(port, s);
+                        }
+                    } catch (Exception e) {
+                        logger.warn("Er, it did not like port {}", a.getPortNumber());
+                    }
+                });
+            } catch (OctaneSdkException ex) {
+                logger.warn("Er, it did not like querying the status of the reader!");
+            }
+            reader_command_semaphore.release();
+            
+            lastAntennaUpdateTS = now; 
+        }
+        logger.debug("Exiting getAntennaStatus: {}",lastAntennaUpdateTS);     
+        
         return antennaStatus;
 
     }
