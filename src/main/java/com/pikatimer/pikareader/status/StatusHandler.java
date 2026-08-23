@@ -21,6 +21,9 @@ import com.pikatimer.pikareader.http.HTTPHandler;
 import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderHandler;
 import com.pikatimer.pikareader.tags.TagRead;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -181,10 +184,33 @@ public class StatusHandler {
             statusReport.put("readerPortStats", readerPortStats);
 
             //statusReport.put("antenna read strength", antennaReadStrengthMap);
-            // TODO: Raspberry Pi Stats: 
-            // GPS Stats
-            // NTP Stats
-            // Battery Level / Voltage
+            
+            
+            // External Status from helper app 
+            String statusFile = pikaConfig.getStringValue("StatusFile");
+            logger.info("StatusHandler: statusFile is set to {}",statusFile);
+            if (statusFile != null && ! statusFile.isEmpty()) {
+                try {
+                    // Grab the file and parse the json
+                    JSONObject externalStatus = new JSONObject(Files.readString(Paths.get(statusFile))); 
+                    
+                    // Check to see if we have a battery level
+                    if (externalStatus.opt("BATTERY") instanceof Number) statusReport.put("battery",externalStatus.get("BATTERY"));
+                    
+                } catch (Exception ex) {
+                    logger.info("Error reading external status file: {}",statusFile,ex);
+                }
+
+                // TODO:
+                // GPS Stats
+                // NTP Stats
+                // Estimated Runtime Remaining
+                
+            } else {
+                statusReport.put("Battery",-1);
+            }
+            
+            
             Instant now = Instant.now();
 
             statusReport.put("timestamp", now.toString());

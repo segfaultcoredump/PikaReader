@@ -142,6 +142,10 @@ public class TagRead implements Comparable<TagRead> {
     public void setEpochMilli(Long epochMilli) {
         this.epochMilli = epochMilli;
     }
+    
+    public Long getEpochMilli(){
+        return this.epochMilli;
+    }
 
     public void setTZOffset(String offset) {
         this.tzOffset = offset;

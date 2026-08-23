@@ -19,6 +19,7 @@ package com.pikatimer.pikareader.readers.impinj;
 import com.impinj.octane.AntennaChangeListener;
 import com.impinj.octane.AntennaEvent;
 import com.impinj.octane.ImpinjReader;
+import com.pikatimer.pikareader.readers.RFIDReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,14 +32,14 @@ public class ImpinjAntennaChangeListener implements AntennaChangeListener {
         private static final Logger logger = LoggerFactory.getLogger(AntennaChangeListener.class);
 
     
-    Impinj reader = null;
+    RFIDReader reader = null;
     @Override
     public void onAntennaChanged(ImpinjReader r, AntennaEvent e) {
         logger.info("Antenna Status Change: Reader: {} Port: {} State: {}",reader.getID(), e.getPortNumber(), e.getState().toString());
         reader.getAntennaStatus().put((int) e.getPortNumber(), e.getState().toString().replace("Antenna", ""));
     }
     
-    ImpinjAntennaChangeListener(Impinj reader){
+    public ImpinjAntennaChangeListener(RFIDReader reader){
         this.reader = reader;
     }
 }

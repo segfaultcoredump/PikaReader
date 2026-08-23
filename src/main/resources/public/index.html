@@ -171,7 +171,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             var readerStatus = document.getElementById("readerStatus");
             var readRate = document.getElementById("readRate");
             var antennaStatus = document.getElementById("antennaStatus");
-            var eventSocket = "ws://" + window.location.host + "/events";
+            var eventSocket = "ws://" + window.location.host + "/status";
             webSocket = new WebSocket(eventSocket);
             webSocket.onmessage = function (message) {
                 const data = message.data;

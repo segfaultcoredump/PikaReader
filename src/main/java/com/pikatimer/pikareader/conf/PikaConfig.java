@@ -110,7 +110,8 @@ public class PikaConfig {
         // look for some defaults:
         
         // UnitID and IP
-        // the IP can change so we always update it. The MAC is used as a unit ID and should not change
+        // the IP can change so we always update it. 
+        // The MAC is used as a default unit ID and should not change too often once the system is provisioned
         
         String MAC = "UNKNOWN";
         String IP = "UNKNOWN";
@@ -168,6 +169,10 @@ public class PikaConfig {
         if (configRoot.optString("ChipFormat").isBlank()){
             putValue("ChipFormat","Decimal");
             
+        }
+        
+        if (!configRoot.has("StatusFile")){
+            putValue("StatusFile","");
         }
 
         logger.trace("Exiting PikaConfig::loadConfig()");

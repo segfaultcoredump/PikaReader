@@ -83,9 +83,9 @@ public class ReaderHandler {
             readerConfig.put("Gating Style", ReaderGatingStyle.READER);
             JSONArray defaultReaders = new JSONArray();
             JSONObject defaultReader = new JSONObject();
-            defaultReader.put("Index", 0);
+            defaultReader.put("Index", 1);
             defaultReader.put("Type", "IMPINJ");
-            defaultReader.put("IP", "127.0.0.1");
+            defaultReader.put("IP", "192.0.2.10");
             defaultReader.put("Power Level", "HIGH");
             defaultReaders.put(defaultReader);
 
@@ -98,7 +98,7 @@ public class ReaderHandler {
         CountDownLatch latch = new CountDownLatch(readerConfig.getJSONArray("Readers").length());
         readerConfig.getJSONArray("Readers").forEach(r -> {
             JSONObject rc = (JSONObject) r; // FFS
-            Integer index = rc.optInt("Index", 0);
+            Integer index = rc.getInt("Index");
             String type = rc.optString("Type", "NOT SET");
 
             if (rfidReaderFactory.containsKey(type)) {
@@ -109,6 +109,7 @@ public class ReaderHandler {
                 });
             } else {
                 logger.error("RFID Reader Config Error! No handler found for RFID Reader type {}", type);
+                latch.countDown();
             }
         });
         try {

@@ -55,7 +55,8 @@ public class HTTPHandler {
 
     private Thread javalinThread;
     private Javalin javalinApp;
-    private static final List<WsContext> webSocketConnections = new ArrayList<>();
+    private static final List<WsContext> eventWebSocketConnections = new ArrayList<>();
+    private static final List<WsContext> statusWebSocketConnections = new ArrayList<>();
 
 //    ReaderHandler readerHandler = ReaderHandler.getInstance();
     private static class SingletonHolder {
@@ -90,10 +91,23 @@ public class HTTPHandler {
             javalinApp.ws("/events", ws -> {
                 ws.onConnect(ctx -> {
                     ctx.enableAutomaticPings();
-                    webSocketConnections.add(ctx);
+                    eventWebSocketConnections.add(ctx);
                 });
                 ws.onClose(ctx -> {
-                    webSocketConnections.remove(ctx);
+                    eventWebSocketConnections.remove(ctx);
+                });
+                ws.onMessage(ctx -> {
+
+                });
+            });
+            
+            javalinApp.ws("/status", ws -> {
+                ws.onConnect(ctx -> {
+                    ctx.enableAutomaticPings();
+                    statusWebSocketConnections.add(ctx);
+                });
+                ws.onClose(ctx -> {
+                    statusWebSocketConnections.remove(ctx);
                 });
                 ws.onMessage(ctx -> {
 
@@ -154,14 +168,17 @@ public class HTTPHandler {
                 ctx.json(tr.toJSON());
             });
 
-            // Rewinds the data. from and to are in ISO_LOCAL_DATE_TIME 2011-12-03T10:15:30
+            //TODO: Add the ability to specify the from and to 
+            // in epoc millis. Need to add the getEPOCMillis to the reads :-) 
+            
+            // Rewinds the data. "from" and "to" are in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
             javalinApp.get("/rewind/{from}/{to}", ctx -> {
 
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
                 LocalDateTime toTime = LocalDateTime.parse(ctx.pathParam("to"));
 
                 JSONArray data = new JSONArray();
-                TagDB.getInstance().getReads().stream().sorted().forEach(read -> {
+                TagDB.getInstance().getReads().stream().sorted().forEach(read -> { 
                     if (fromTime.isBefore(read.getTimestamp()) && toTime.isAfter(read.getTimestamp())) {
                         data.put(read.toJSONObject());
                     }
@@ -169,7 +186,7 @@ public class HTTPHandler {
                 ctx.json(data.toString());
             });
 
-            // Rewinds the data. from is in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
+            // Rewinds the data. "from" is in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
             javalinApp.get("/rewind/{from}", ctx -> {
 
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
@@ -195,9 +212,11 @@ public class HTTPHandler {
             javalinApp.get("/status", ctx -> {
                 ctx.json(StatusHandler.getInstance().getStatus().toString(4));
             });
-            // TODO: Live Antenna Monitor page
+
             // TODO: Reader config page
             // TODO: Uploader config page
+            // TODO: Status ws for folks who don't care about the reads
+            
             // Start the javalin server
             javalinApp.start(webConfig.optIntegerObject("Port", 8080));
 
@@ -216,7 +235,7 @@ public class HTTPHandler {
     }
 
     public void sendTag(TagRead tr) {
-        webSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
+        eventWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
             JSONObject read = tr.toJSONObject();
             read.put("type", "READ");
             ws.send(read.toString());
@@ -235,7 +254,10 @@ public class HTTPHandler {
 
     public void postStatus(JSONObject statusReport) {
         statusReport.put("type", "STATUS");
-        webSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
+        statusWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
+            ws.send(statusReport.toString());
+        });
+        eventWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
             ws.send(statusReport.toString());
         });
     }

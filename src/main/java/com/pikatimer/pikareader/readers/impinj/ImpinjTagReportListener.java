@@ -84,7 +84,7 @@ public class ImpinjTagReportListener implements TagReportListener {
             tr.setPeakRSSI(t.getPeakRssiInDbm());
 
             // Impinj returns a Date object in UTC, So we get to convert it. 
-            Instant timestamp = t.getLastSeenTime().getLocalDateTime().toInstant();
+            Instant timestamp = t.getFirstSeenTime().getLocalDateTime().toInstant();
 
             tr.setEpochMilli(timestamp.toEpochMilli());
             tr.setTZOffset(ZonedDateTime.ofInstant(timestamp, zoneId).getOffset().toString());

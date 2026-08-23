@@ -185,7 +185,7 @@ public class Impinj implements RFIDReader {
                 report.setIncludePeakRssi(Boolean.TRUE);
                 //report.setIncludePhaseAngle(Boolean.TRUE);
                 //report.setIncludeFirstSeenTime(Boolean.TRUE);
-                report.setIncludeLastSeenTime(Boolean.TRUE);
+                report.setIncludeFirstSeenTime(Boolean.TRUE);
                 //settings.setReport(report);
 
                 // We will default to the static fast mode 
@@ -206,7 +206,7 @@ public class Impinj implements RFIDReader {
                 // See https://support.impinj.com/hc/en-us/articles/202756158
                 settings.setSearchMode(SearchMode.DualTargetBtoASelect);
                 //settings.setSession(1);
-                settings.setTagPopulationEstimate(256);
+                settings.setTagPopulationEstimate(128);
 
                 // Enable keepalivbes
                 settings.getKeepalives().setEnabled(true);
@@ -267,6 +267,8 @@ public class Impinj implements RFIDReader {
                         logger.warn("Er, it did not like port {}", a.getPortNumber());
                     }
                 });
+                
+                reader.setAntennaChangeListener(new ImpinjAntennaChangeListener(this));
 
                 logger.debug("Applying Settings for readerID {}", readerID);
                 reader.applySettings(settings);
@@ -373,36 +375,34 @@ public class Impinj implements RFIDReader {
 
     @Override
     public Map<Integer, String> getAntennaStatus() {
-        long now = Instant.now().getEpochSecond();
-        
-        // The AntennaChangeListener is not fired when it is not in read mode
-        // So we will force a refresh 5 seconds
-        logger.debug("Starting getAntennaStatus(): {}",lastAntennaUpdateTS);
-        
-        
-        if ((now - lastAntennaUpdateTS) > 5 && !reading && connected && reader_command_semaphore.tryAcquire()){
-            try {
-                reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
-                    try {                        
-                        logger.info(" Antenna Status: Reader: {} Port: {} Connected: {} ", readerID, a.getPortNumber(), a.isConnected());
-                        String s = a.isConnected() ? "Connected" : "Disconnected";
-                        Integer port = (int) a.getPortNumber();
-                        if (! "Disabled".equals(antennaStatus.get(port)) && ! s.equals(antennaStatus.get(port))) {
-                            logger.info("Antenna status changed!");
-                            antennaStatus.put(port, s);
-                        }
-                    } catch (Exception e) {
-                        logger.warn("Er, it did not like port {}", a.getPortNumber());
-                    }
-                });
-            } catch (OctaneSdkException ex) {
-                logger.warn("Er, it did not like querying the status of the reader!");
-            }
-            reader_command_semaphore.release();
-            
-            lastAntennaUpdateTS = now; 
-        }
-        logger.debug("Exiting getAntennaStatus: {}",lastAntennaUpdateTS);     
+//        long now = Instant.now().getEpochSecond();
+//        
+//        logger.debug("Starting getAntennaStatus(): {}",lastAntennaUpdateTS);
+//        
+//        
+//        if ((now - lastAntennaUpdateTS) > 5 && !reading && connected && reader_command_semaphore.tryAcquire()){
+//            try {
+//                reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
+//                    try {                        
+//                        logger.info(" Antenna Status: Reader: {} Port: {} Connected: {} ", readerID, a.getPortNumber(), a.isConnected());
+//                        String s = a.isConnected() ? "Connected" : "Disconnected";
+//                        Integer port = (int) a.getPortNumber();
+//                        if (! "Disabled".equals(antennaStatus.get(port)) && ! s.equals(antennaStatus.get(port))) {
+//                            logger.info("Antenna status changed!");
+//                            antennaStatus.put(port, s);
+//                        }
+//                    } catch (Exception e) {
+//                        logger.warn("Er, it did not like port {}", a.getPortNumber());
+//                    }
+//                });
+//            } catch (OctaneSdkException ex) {
+//                logger.warn("Er, it did not like querying the status of the reader!");
+//            }
+//            reader_command_semaphore.release();
+//            
+//            lastAntennaUpdateTS = now; 
+//        }
+//        logger.debug("Exiting getAntennaStatus: {}",lastAntennaUpdateTS);     
         
         return antennaStatus;
 
