@@ -6,44 +6,45 @@ PikaReader is intended to sit on a small single board computer (Raspberry Pi, et
 The intent is to eliminate the typical "Single Point of Failure" modes we see when a timing application connects directly to a raw RFID reader.
 By pairing a PikaReader instance with each RFID Reader with a dedicated network cable to the RFID Reader, the primary timing laptop can go offline and the timer will not lose any data as a result. 
 
-The system supports a "rewind" function that allows the PikaReader system to collect tag reads that can later be downloaded and imported into a timing application (PikaTimer, RaceDay Scoring, etc)
+The system supports a "rewind" function that allows the PikaReader system to collect tag reads that can later be downloaded and imported into a timing application (PikaTimer, RaceDay Scoring, etc). 
+This allows for remote and offline readers for on-course splits or remote starting lines. 
 
 ## Current Features
-* Support for Impinj R420 readers (via Octane 3.x SDK)
-* Ability to store tag reads for later retrieval by the timing application
-* Live streaming of tag reads via a websocket to a timing application or the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app
-* Ability to "rewind" and retrieve previously read tags
-* No effective limit on the number of connected RFID Readers
-* No effective limit on the number of connected clients
-* Per-antenna read stats via status api and real time web display
-* User Selectable gating to reduce the number of tags transmitted to the timing application
-* Debug log available via built in http server
-* Antenna Status Display via web UI
-* Support for both Decimal and Hex encoded tags
+* Web based status and control (start/stop reading, trigger).
+* Support for Impinj R420 readers (via Octane 3.x SDK).
+* Ability to store and "rewind" tag reads for later retrieval by the timing application.
+* Live streaming of tag reads via a websocket to a timing application or the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app.
+* Per-antenna read stats via status api and real time web display.
+* User configurable gating to reduce the number of tags transmitted to the timing application.
+* Debug log available via built in http server.
+* Antenna Status Display via web UI.
+* Support for both Decimal and Hex encoded tags.
+* Support for a "trigger" that can be used to drop a special "0" chip read to use to mark the start of a race. 
 
-## Additional Projects
-* Use the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app to download data from the reader to a local text file
-* See the [PikaReader4Pi](https://github.com/PikaTimer/PikaReader4Pi) project for an example of building a small standalone reader
+## Additional Notes
+* Use the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app to download data from the reader to a local text file.
+* See the [PikaReader4Pi](https://github.com/PikaTimer/PikaReader4Pi) project for an example of building a small standalone reader.
 
 ## Planned 
 * Integration with PikaTimer application 
 * Integration with PikaRelay for remote retrieval of data
 * Support for additional IP Based Readers:
-    * Zebra / Mororola FX Series 
     * Impinj R700 (both LLRP and REST/I2C based)
-* Support for TSL and ThingMagic/Jadak UART based readers
-* Support for generic LLRP Readers with reduced functionality
+    * Zebra / Mororola FX Series 
+* Support for UART based readers (TSL and ThingMagic/Jadak )
+* Support for generic LLRP Readers
 * Web Based configuration tool
 
 
 ## Usage
 Requires OpenJRE 21 or newer. 
 
-Launch the jar file: java -jar PikaReader-0.6.jar 
+Launch the jar file: java -jar PikaReader.jar 
 
 Press the space bar to stop. 
 
 The default web UI port is http on port 8080. 
+You can use the web based UI to start or Stop the reader or create a "trigger" to mark an event such as the start of a race. 
 
 HTTP paths for basic system status and information
 - `/` -- Basic System information and web UI for control of PikaReader 
