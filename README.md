@@ -35,6 +35,13 @@ This allows for remote and offline readers for on-course splits or remote starti
 * Support for generic LLRP Readers
 * Web Based configuration tool
 
+## Screen Snapshots
+
+*Main Web Interface:*
+![Main Web Interface](assets/PikaReaderWebUI.png)
+
+*Antenna Stats:*
+![Antenna Stats](assets/PikaReaderAntennaStats.png)
 
 ## Usage
 Requires OpenJRE 21 or newer. 
