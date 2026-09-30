@@ -38,10 +38,13 @@ This allows for remote and offline readers for on-course splits or remote starti
 ## Screen Snapshots
 
 *Main Web Interface:*
-![Main Web Interface](assets/PikaReaderWebUI.png)
+
+<img src="assets/PikaReaderWebUI.png" width="300">
 
 *Antenna Stats:*
-![Antenna Stats](assets/PikaReaderAntennaStats.png)
+
+<img src="assets/PikaReaderAntennaStats.png" width="300">
+
 
 ## Usage
 Requires OpenJRE 21 or newer. 
