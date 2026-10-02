@@ -379,7 +379,12 @@ public class Impinj implements RFIDReader {
         
         logger.trace("Starting getAntennaStatus(): {}",lastAntennaUpdateTS);
         
-        
+        // The impinj reader will not report on antenna change status while the 
+        // unit is not in read mode. But it will when we explicitly call a 
+        // reader.queryStatus().getAntennaStatusGroup()
+        // So we do just that every 5 seconds just to force its hand. 
+        // Most of the code below is not needed since the ImpingAntennaChangeListener will also update the
+        // record. 
         if ((now - lastAntennaUpdateTS) > 5 && !reading && connected && reader_command_semaphore.tryAcquire()){
             try {
                 reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
