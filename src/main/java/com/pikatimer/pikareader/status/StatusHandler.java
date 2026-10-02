@@ -188,7 +188,7 @@ public class StatusHandler {
             
             // External Status from helper app 
             String statusFile = pikaConfig.getStringValue("StatusFile");
-            logger.info("StatusHandler: statusFile is set to {}",statusFile);
+            //logger.info("StatusHandler: statusFile is set to {}",statusFile);
             if (statusFile != null && ! statusFile.isEmpty()) {
                 try {
                     // Grab the file and parse the json
