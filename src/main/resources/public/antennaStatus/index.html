@@ -73,7 +73,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
         <script src="/js/chart-4.4.1.js"></script>
         <script>
-            var eventSocket = "ws://" + window.location.host + "/events";
+            var eventSocket = "ws://" + window.location.host + "/status";
             console.log("Server Host" + window.location.host);
 
             var connectionStatus = document.getElementById("connectionStatus");
@@ -151,8 +151,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                     maintainAspectRatio: false,
                                     scales: {
                                         y: {
-                                            min: -90,
-                                            max: -20,
+                                            min: -80,
+                                            max: -30,
                                             title: {
                                                 display: true,
                                                 text: 'RSSI dBm'
