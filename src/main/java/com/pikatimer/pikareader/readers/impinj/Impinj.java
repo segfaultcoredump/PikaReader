@@ -94,6 +94,8 @@ public class Impinj implements RFIDReader {
 
     @Override
     public void setClock() {
+        // TODO: Check the config to see if we should use NTP
+        // If so, just set it to use NTP and be done with it. 
         logger.trace("Entering Impinj::setClock() for {}", readerIP);
         try {
 
@@ -280,7 +282,7 @@ public class Impinj implements RFIDReader {
                 
 
             } catch (OctaneSdkException ex) {
-                logger.error("OctaneSdkExcepton connecting to {} with stack trace {}", readerIP, ex.getMessage());
+                logger.error("OctaneSdkExcepton connecting to {} with error {}", readerIP, ex.getMessage(), ex);
                 reader.disconnect();
             } catch (Exception ex) {
                 System.out.println(ex.getMessage());
@@ -308,16 +310,12 @@ public class Impinj implements RFIDReader {
         try {
             reader_command_semaphore.acquire();
             if (connect()) {
-
-                
                 // Make sure the reader's time is correct
                 setClock();
 
                 logger.info("Starting reader {}", reader.getAddress());
                 reader.start();
                 reading = true;
-                
-
             }
 
         } catch (OctaneSdkException ex) {
@@ -359,7 +357,7 @@ public class Impinj implements RFIDReader {
     @Override
     public RFIDReader create(JSONObject config) {
         Impinj newReader = new Impinj();
-        newReader.readerID = config.optInt("Index", 0);
+        newReader.readerID = config.optInt("Index", 1);
         newReader.readerIP = config.optString("IP", "127.0.0.1");
         newReader.readerConfig = config;
 
@@ -377,29 +375,29 @@ public class Impinj implements RFIDReader {
     public Map<Integer, String> getAntennaStatus() {
         long now = Instant.now().getEpochSecond();
         
-        logger.trace("Starting getAntennaStatus(): {}",lastAntennaUpdateTS);
+        logger.trace("Starting getAntennaStatus(): Last antenna check was at {}",lastAntennaUpdateTS);
         
         // The impinj reader will not report on antenna change status while the 
         // unit is not in read mode. But it will when we explicitly call a 
         // reader.queryStatus().getAntennaStatusGroup()
         // So we do just that every 5 seconds just to force its hand. 
-        // Most of the code below is not needed since the ImpingAntennaChangeListener will also update the
-        // record. 
+        // The actual tracking of any changes is handled by the ImpinjAntennaChangeListener callback
         if ((now - lastAntennaUpdateTS) > 5 && !reading && connected && reader_command_semaphore.tryAcquire()){
             try {
-                reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
-                    try {                        
-                        logger.trace(" Antenna Status: Reader: {} Port: {} Connected: {} ", readerID, a.getPortNumber(), a.isConnected());
-                        String s = a.isConnected() ? "Connected" : "Disconnected";
-                        Integer port = (int) a.getPortNumber();
-                        if (! "Disabled".equals(antennaStatus.get(port)) && ! s.equals(antennaStatus.get(port))) {
-                            logger.info("Impinj Antenna status changed!: Port: {} Old: {} New: {}", port,antennaStatus.get(port), s);
-                            antennaStatus.put(port, s);
-                        }
-                    } catch (Exception e) {
-                        logger.warn("Er, it did not like port {}", a.getPortNumber());
-                    }
-                });
+                logger.trace("It has been more than 5 seconds, Triggering an antenna check...");
+                reader.queryStatus().getAntennaStatusGroup().getAntennaList();//.forEach(a -> {
+//                    try {                        
+//                        logger.trace(" Antenna Status: Reader: {} Port: {} Connected: {} ", readerID, a.getPortNumber(), a.isConnected());
+//                        String s = a.isConnected() ? "Connected" : "Disconnected";
+//                        Integer port = (int) a.getPortNumber();
+//                        if (! "Disabled".equals(antennaStatus.get(port)) && ! s.equals(antennaStatus.get(port))) {
+//                            logger.info("Impinj Antenna status changed!: Port: {} Old: {} New: {}", port,antennaStatus.get(port), s);
+//                            antennaStatus.put(port, s);
+//                        }
+//                    } catch (Exception e) {
+//                        logger.warn("Er, it did not like port {}", a.getPortNumber());
+//                    }
+//                });
             } catch (OctaneSdkException ex) {
                 logger.warn("Er, it did not like querying the status of the reader!");
             }
@@ -407,7 +405,7 @@ public class Impinj implements RFIDReader {
             
             lastAntennaUpdateTS = now; 
         }
-        logger.trace("Exiting getAntennaStatus: {}",lastAntennaUpdateTS);     
+        logger.trace("Exiting getAntennaStatus: Last antenna check was at {}",lastAntennaUpdateTS);     
         
         return antennaStatus;
 

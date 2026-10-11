@@ -80,7 +80,7 @@ public class TagReadProcessor implements Runnable {
                     gating = defaultGating;
                 }
                 ReaderGatingStyle gatingStyle = ReaderGatingStyle.getStyle(pikaConfig.getKey("Reader").optString("Gating Style"));
-
+                
                 logger.debug("Waiting for tag reads.... Gating: {} Style: {}", gating, gatingStyle);
                 tags.add(tagQueue.take());
 
@@ -143,7 +143,7 @@ public class TagReadProcessor implements Runnable {
                     statusHandler.lastChipRead(lastChipRead);
                 }
                 
-                Thread.sleep(1000); // take a nap for a second
+                Thread.sleep(100); // take a nap for a short bit
 
             }
         } catch (InterruptedException ex) {
