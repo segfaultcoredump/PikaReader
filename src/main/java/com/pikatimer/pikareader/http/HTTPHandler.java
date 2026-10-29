@@ -27,6 +27,7 @@ import com.pikatimer.pikareader.util.DebugLogHolder;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
@@ -85,15 +86,24 @@ public class HTTPHandler {
         javalinThread = new Thread(() -> {
             javalinApp = Javalin.create(config -> {
                 config.staticFiles.add("/public", Location.CLASSPATH);
+                
+                config.jetty.modifyWebSocketServletFactory(factory -> {
+                    // Set idle timeout to 15 seconds. 
+                    // If no data or pings are exchanged for 15s, the server drops the socket.
+                    factory.setIdleTimeout(Duration.ofSeconds(15));
+                });
+                
             });
 
             // WebSocket to send all events along
             javalinApp.ws("/events", ws -> {
                 ws.onConnect(ctx -> {
+                    logger.debug("/event Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
                     ctx.enableAutomaticPings();
                     eventWebSocketConnections.add(ctx);
                 });
                 ws.onClose(ctx -> {
+                    logger.debug("/event Websocket onClose: {} due to {}",ctx.session.getRemoteAddress().toString(), ctx.closeStatus().toString());
                     eventWebSocketConnections.remove(ctx);
                 });
                 ws.onMessage(ctx -> {
@@ -103,10 +113,12 @@ public class HTTPHandler {
             
             javalinApp.ws("/status", ws -> {
                 ws.onConnect(ctx -> {
+                    logger.debug("/status Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
                     ctx.enableAutomaticPings();
                     statusWebSocketConnections.add(ctx);
                 });
                 ws.onClose(ctx -> {
+                    logger.debug("/status Websocket onClose: {}",ctx.session.getRemoteAddress().toString());
                     statusWebSocketConnections.remove(ctx);
                 });
                 ws.onMessage(ctx -> {
@@ -137,7 +149,7 @@ public class HTTPHandler {
             // debug info
             javalinApp.get("/debug", ctx -> {
                 StringBuilder response = new StringBuilder();
-                response.append("<html><head><Title>PikaReader Debug</title></head><body>\n");
+                response.append("<html><head><Title>PikaReader Debug</title></head><body><pre>\n");
                 DebugLogHolder.getEventList().forEach(event -> {
                     //ILoggingEvent event = DebugLogHolder.eventMap.get(e);
                     response.append(event.getInstant()).append(": ");
@@ -147,7 +159,7 @@ public class HTTPHandler {
                     //if (event.hasCallerData()) response.append(event.getCallerData());
                     response.append("<BR>\n");
                 });
-                response.append("<body><html>\n");
+                response.append("</pre><body><html>\n");
                 ctx.html(response.toString());
             });
 
@@ -246,10 +258,6 @@ public class HTTPHandler {
         reads.forEach(tr -> {
             sendTag(tr);
         });
-    }
-
-    public void sendTag(Status s) {
-
     }
 
     public void postStatus(JSONObject statusReport) {
