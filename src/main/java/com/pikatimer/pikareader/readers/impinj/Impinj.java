@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 John Garner <segfaultcoredump@gmail.com>
+ * Copyright (C) 2026 John Garner <segfaultcoredump@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -186,8 +186,9 @@ public class Impinj implements RFIDReader {
                 report.setMode(ReportMode.Individual);
                 report.setIncludePeakRssi(Boolean.TRUE);
                 //report.setIncludePhaseAngle(Boolean.TRUE);
-                //report.setIncludeFirstSeenTime(Boolean.TRUE);
+                report.setIncludeLastSeenTime(Boolean.FALSE);
                 report.setIncludeFirstSeenTime(Boolean.TRUE);
+                report.setIncludeSeenCount(Boolean.FALSE);
                 //settings.setReport(report);
 
                 // We will default to the static fast mode 
