@@ -140,6 +140,9 @@ public class TagDB {
                     } catch (IOException ex) {
                         logger.error("Error writing to {}", outputFile.getAbsolutePath(), ex);
                     }
+                    // Take a nap so that we don't write out a dozen files per second
+                    // This limits us to no more than one file every 5 seconds or so
+                    Thread.sleep(5000);
                 }
             } catch (InterruptedException ex) {
             }
