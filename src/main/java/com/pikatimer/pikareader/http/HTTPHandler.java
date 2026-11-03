@@ -98,13 +98,20 @@ public class HTTPHandler {
             // WebSocket to send all events along
             javalinApp.ws("/events", ws -> {
                 ws.onConnect(ctx -> {
-                    logger.debug("/event Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
                     ctx.enableAutomaticPings();
                     eventWebSocketConnections.add(ctx);
+                    
+                    logger.debug("/event Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
+
+                    //stash the remote IP for later use if we need it
+                    var remoteAddr = ctx.session.getRemoteAddress();
+                    String ipAddress = (remoteAddr != null) ? remoteAddr.toString() : "Unknown IP";
+                    ctx.attribute("user-ip", ipAddress);
                 });
                 ws.onClose(ctx -> {
-                    logger.debug("/event Websocket onClose: {} due to {}",ctx.session.getRemoteAddress().toString(), ctx.closeStatus().toString());
                     eventWebSocketConnections.remove(ctx);
+                    String ipAddress = ctx.attribute("user-ip");
+                    logger.debug("/event Websocket onClose from {} due to {}", ipAddress, ctx.closeStatus().toString());
                 });
                 ws.onMessage(ctx -> {
 
@@ -116,10 +123,17 @@ public class HTTPHandler {
                     logger.debug("/status Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
                     ctx.enableAutomaticPings();
                     statusWebSocketConnections.add(ctx);
+                    
+                    //stash the remote IP for later use if we need it
+                    var remoteAddr = ctx.session.getRemoteAddress();
+                    String ipAddress = (remoteAddr != null) ? remoteAddr.toString() : "Unknown IP";
+                    ctx.attribute("user-ip", ipAddress);
                 });
                 ws.onClose(ctx -> {
-                    logger.debug("/status Websocket onClose: {}",ctx.session.getRemoteAddress().toString());
                     statusWebSocketConnections.remove(ctx);
+                    String ipAddress = ctx.attribute("user-ip");
+                    logger.debug("/event Websocket onClose due to {}", ctx.closeStatus().toString());
+                    
                 });
                 ws.onMessage(ctx -> {
 
