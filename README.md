@@ -75,7 +75,7 @@ Websocket (ws://)
 - `/events` -- send a message for each read or status update
 
 ## Logging
-Debug logs are written to `pikareader.log` in the system temp directory. Use `-DPIKAREADER_LOG=/path/to/file.log` to change the location.
+Debug logs are written to `pikareader.log` in the system temp directory. Use `-DPIKAREADER_LOG=/path/to/file.log` to change the output file name and location.
 A new log file is started each time PikaReader runs, and the logs from the last 5 runs are kept (`pikareader.log`, `pikareader.log.1` ... `pikareader.log.4`).
 
 ## Notice!

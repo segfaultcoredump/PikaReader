@@ -19,11 +19,10 @@ PikaReader is a Java 21 / Maven app (v0.7, GPL-3.0) that runs on a small SBC (e.
 - **Singletons**: `PikaConfig`, `TagDB`, `ReaderHandler`, `HTTPHandler`, `StatusHandler`, `TagReadProcessor`, `TagReadRouter` all use the SingletonHolder idiom. Startup order is in `PikaReader.start()`.
 - **Reader plugins**: `RFIDReader` is the interface. Implementations are annotated `@AutoService(RFIDReader.class)` and discovered via `ServiceLoader` in `ReaderHandler`, keyed by `getType()`, which must match the `"Type"` in the config's reader entries. `Impinj` (with listener classes in `readers/impinj/`) is the only real implementation; `LLRP` and `Zebra` are empty stubs.
 - **Tag pipeline**: `ImpinjTagReportListener` → `TagReadProcessor` (100k-entry queue; gates by `Gating` seconds and `Gating Style` ANTENNA/BOX/READER, keeping the strongest read per key) → `TagReadRouter` (applies `ChipFormat` hex/decimal) → fan-out to `TagDB.addReads` (on-disk JSON lines at `/yyyy/MM/dd/HH/HH-mm-ss.SSS.dat`, only today's files are loaded into memory at startup; `/rewind/{from}[/{to}]` reads older days from disk via `TagDB.getReadsBetween`) and `HTTPHandler.sendTags` (websocket `/events`).
-- **HTTP**: `HTTPHandler` uses Javalin 6 (beta). REST: `/start /stop /trigger /rewind[/{from}[/{to}]] /debug /status`; websockets `/events` and `/status`; static UI in `src/main/resources/public`. `StatusHandler` aggregates per-antenna stats, `DiscoveryListener` answers UDP broadcast discovery, `DebugLogHolder` backs `/debug` through logback.
+- **HTTP**: `HTTPHandler` uses Javalin 6.7. REST: `/start /stop /trigger /rewind[/{from}[/{to}]] /debug /status`; websockets `/events` and `/status`; static UI in `src/main/resources/public`. `StatusHandler` aggregates per-antenna stats, `DiscoveryListener` answers UDP broadcast discovery, `DebugLogHolder` backs `/debug` through logback.
 
 ## Gotchas
 
 - A "trigger" is a special read with chip/reader/antenna all 0.
-- `PikaConfig.VERSION` is hard-coded (`"0.6"`) separately from the pom version.
 - JSON uses `org.json` throughout; a Jackson migration is listed in `TODO.md`.
 - `com.impinj:octane-sdk` must be resolvable by Maven to build.

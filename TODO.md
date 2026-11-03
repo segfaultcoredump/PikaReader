@@ -21,7 +21,6 @@
 
 ## v1.3+ (or whenever)
 - Bug Fixes and general cleanup
-- logging cleanup (keep last 10)
 - Migrate to Jackson for json encoding and parsing
 - On-Disk Cleanup via web config
 
