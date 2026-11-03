@@ -27,9 +27,25 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             <level>INFO</level>
         </filter>
     </appender>
+    <!-- Log file: override with -DPIKAREADER_LOG=/path/to/file.log
+         A new file is started on each run; the last 5 runs are kept
+         (pikareader.log plus pikareader.log.1 through .4) -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${PIKAREADER_LOG:-${java.io.tmpdir}/pikareader.log}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${PIKAREADER_LOG:-${java.io.tmpdir}/pikareader.log}.%i</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>4</maxIndex>
+        </rollingPolicy>
+        <triggeringPolicy class="com.pikatimer.pikareader.util.StartupTriggeringPolicy"/>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n</pattern>
+        </encoder>
+    </appender>
     <appender name="DebugLogHolder" class="com.pikatimer.pikareader.util.DebugLogHolder"/>
     <root level="info">
         <appender-ref ref="STDOUT" />
+        <appender-ref ref="FILE" />
         <appender-ref ref="DebugLogHolder" />
     </root>
     

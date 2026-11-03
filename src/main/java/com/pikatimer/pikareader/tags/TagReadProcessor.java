@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 John Garner <segfaultcoredump@gmail.com>
+ * Copyright (C) 2026 John Garner <segfaultcoredump@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +89,9 @@ public class TagReadProcessor implements Runnable {
                 tagQueue.drainTo(tags);
 
                 logger.debug("Recieved {} raw tag reads to process", tags.size());
+                
+                // sort all of the new tags by the epochMilli for each read
+                tags.sort(null);
 
                 tags.forEach(t -> {
                     if (!tagReadMap.containsKey(t.hexEPC)) {

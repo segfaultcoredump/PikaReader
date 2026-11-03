@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 John Garner <segfaultcoredump@gmail.com>
+ * Copyright (C) 2026 John Garner <segfaultcoredump@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -199,31 +200,15 @@ public class HTTPHandler {
             
             // Rewinds the data. "from" and "to" are in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
             javalinApp.get("/rewind/{from}/{to}", ctx -> {
-
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
                 LocalDateTime toTime = LocalDateTime.parse(ctx.pathParam("to"));
-
-                JSONArray data = new JSONArray();
-                TagDB.getInstance().getReads().stream().sorted().forEach(read -> { 
-                    if (fromTime.isBefore(read.getTimestamp()) && toTime.isAfter(read.getTimestamp())) {
-                        data.put(read.toJSONObject());
-                    }
-                });
-                ctx.json(data.toString());
+                ctx.json(buildRewind(fromTime, toTime).toString());
             });
 
             // Rewinds the data. "from" is in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
             javalinApp.get("/rewind/{from}", ctx -> {
-
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
-                JSONArray data = new JSONArray();
-                TagDB.getInstance().getReads().stream().sorted().forEach(read -> {
-
-                    if (fromTime.isBefore(read.getTimestamp())) {
-                        data.put(read.toJSONObject());
-                    }
-                });
-                ctx.json(data.toString());
+                ctx.json(buildRewind(fromTime, null).toString());
             });
 
             javalinApp.get("/rewind", ctx -> {
@@ -284,4 +269,31 @@ public class HTTPHandler {
         });
     }
 
+
+    /**
+     * Builds the rewind data for a time range. Today's reads come from memory;
+     * anything before the start of today is read from disk.
+     *
+     * @param fromTime start of range (exclusive)
+     * @param toTime end of range (exclusive), or null for open-ended
+     */
+    private JSONArray buildRewind(LocalDateTime fromTime, LocalDateTime toTime) {
+        JSONArray data = new JSONArray();
+        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
+
+        // Historical portion: anything before today
+        if (fromTime.isBefore(todayStart)) {
+            LocalDateTime histTo = (toTime == null || toTime.isAfter(todayStart)) ? todayStart : toTime;
+            TagDB.getInstance().getReadsBetween(fromTime, histTo).forEach(read -> data.put(read.toJSONObject()));
+        }
+
+        // Today's portion: from memory
+        TagDB.getInstance().getReads().stream().filter(Objects::nonNull).sorted().forEach(read -> {
+            LocalDateTime ts = read.getTimestamp();
+            if (!ts.isBefore(todayStart) && fromTime.isBefore(ts) && (toTime == null || toTime.isAfter(ts))) {
+                data.put(read.toJSONObject());
+            }
+        });
+        return data;
+    }
 }

@@ -51,7 +51,7 @@ Requires OpenJRE 21 or newer.
 
 Launch the jar file: java -jar PikaReader.jar 
 
-Press the space bar to stop. 
+Press Ctrl-C (or send SIGTERM / SIGHUP) to stop. The readers and web server are shut down cleanly.
 
 The default web UI port is http on port 8080. 
 You can use the web based UI to start or Stop the reader or create a "trigger" to mark an event such as the start of a race. 
@@ -63,8 +63,8 @@ HTTP paths for basic system status and information
 REST api paths:
 - `/start` -- Start the reader
 - `/stop` -- Stop the reader
-- `/rewind` -- rewind all data from PikaReader
-- `/rewind/<from>` -- Rewind all data after <from> date/time. Time in ISO format (YYYY-MM-DDTHH:MM:ss)
+- `/rewind` -- rewind all of today's data from PikaReader (current day, local time)
+- `/rewind/<from>` -- Rewind all data after <from> date/time (reads stored history from disk if <from> is before today). Time in ISO format (YYYY-MM-DDTHH:MM:ss)
 - `/rewind/<from>/<to>` -- Rewind data between from and to
 - `/debug` -- Dump the debug log to the browser
 - `/trigger` -- Record a "trigger" time (chip = 0, reader = 0, antenna = 0) to mark an event
@@ -73,6 +73,10 @@ REST api paths:
 Websocket (ws://)
 - `/status` -- sends a message once a second with the current reader status
 - `/events` -- send a message for each read or status update
+
+## Logging
+Debug logs are written to `pikareader.log` in the system temp directory. Use `-DPIKAREADER_LOG=/path/to/file.log` to change the location.
+A new log file is started each time PikaReader runs, and the logs from the last 5 runs are kept (`pikareader.log`, `pikareader.log.1` ... `pikareader.log.4`).
 
 ## Notice!
 The first time the app is run, it will automatically create a basic config file. 

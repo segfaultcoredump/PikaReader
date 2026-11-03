@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 John Garner <segfaultcoredump@gmail.com>
+ * Copyright (C) 2026 John Garner <segfaultcoredump@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
  */
 public class PikaConfig {
 
-    private static final String VERSION = "0.6";
+    private static final String VERSION = "1.0";
 
     private static final Logger logger = LoggerFactory.getLogger(PikaConfig.class);
 

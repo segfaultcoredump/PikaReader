@@ -22,7 +22,7 @@ import com.pikatimer.pikareader.readers.ReaderHandler;
 import com.pikatimer.pikareader.status.StatusHandler;
 import com.pikatimer.pikareader.tags.TagDB;
 import com.pikatimer.pikareader.util.DiscoveryListener;
-import java.util.Scanner;
+import java.util.concurrent.CountDownLatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,7 +54,7 @@ public class PikaReader {
             888        888 888 "88b 888  888 888  T88b  Y8b.     888  888 Y88b 888 Y8b.     888     
             888        888 888  888 "Y888888 888   T88b  "Y8888  "Y888888  "Y88888  "Y8888  888     
 
-                                            ©2024 by John Garner
+                                            ©2026 by John Garner
                                            https://PikaTimer.com/
                                       Released under the GPL-3.0 license.
                                                                                        
@@ -83,23 +83,24 @@ public class PikaReader {
         // start the status handler
         StatusHandler statusHandler = StatusHandler.getInstance();      
        
-        // TODO: This is good for testing,
-        // We need to switch to a thread join() 
-        // before we go v1.0
-        System.out.println("Press Enter to exit.");
-        Scanner s = new Scanner(System.in);
-        s.nextLine();
+        // The JVM runs shutdown hooks on SIGINT (Ctrl-C), SIGTERM and SIGHUP
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutdown signal received. Stopping Readers...");
+            readerHandler.stopReading();
 
-        logger.info("Stopping Readers...");
-        readerHandler.stopReading();
+            logger.info("Stopping Jetty");
+            httpHandler.stopHTTPD();
 
-        logger.info("Stopping Jetty");
-        httpHandler.stopHTTPD();
+            logger.info("PikaReader Stopped...");
+        }, "PikaReaderShutdown"));
 
-        logger.info("PikaReader Stopped...");
-        
-        // Kills any background web sessions that are still hanging out there
-        System.exit(0);
-        
+        System.out.println("Press Ctrl-C (or send SIGTERM/SIGHUP) to exit.");
+
+        // Block until a signal triggers the shutdown hook and the JVM exits
+        try {
+            new CountDownLatch(1).await();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 }
