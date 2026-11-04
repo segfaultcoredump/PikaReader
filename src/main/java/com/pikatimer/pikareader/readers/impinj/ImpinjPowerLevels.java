@@ -18,6 +18,7 @@ package com.pikatimer.pikareader.readers.impinj;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -44,15 +45,20 @@ public enum ImpinjPowerLevels {
     private static Map<String, ImpinjPowerLevels> createMap() {
         Map<String, ImpinjPowerLevels> map = new HashMap<>();
 
+        // Keyed by upper case name so lookups are case-insensitive
         for (ImpinjPowerLevels l : ImpinjPowerLevels.values()) {
-            map.put(l.getLevel(),l);
+            map.put(l.getLevel().toUpperCase(Locale.ROOT), l);
         }
 
         return Collections.unmodifiableMap(map);
     }
-    
+
+    // "Low", "LOW", "low", etc. all match. Unknown or missing values fall back to HIGH.
     public static ImpinjPowerLevels getLevel(String s){
-        return levelMap.containsKey(s)?levelMap.get(s):HIGH;
+        if (s == null) {
+            return HIGH;
+        }
+        return levelMap.getOrDefault(s.trim().toUpperCase(Locale.ROOT), HIGH);
     }
 
     public String getLevel() {
