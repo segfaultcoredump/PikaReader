@@ -18,6 +18,7 @@ package com.pikatimer.pikareader.readers.zebra;
 
 import com.google.auto.service.AutoService;
 import com.pikatimer.pikareader.readers.RFIDReader;
+import com.pikatimer.pikareader.readers.ReaderClock;
 import com.pikatimer.pikareader.readers.impinj.ImpinjPowerLevels;
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -201,7 +202,7 @@ public class Zebra implements RFIDReader {
     private int session = 1;
     private int tagPopulation = 128;
     private int dwellMs = 500;
-    private ZebraClock clock = new ZebraClock(-1, ZebraClock.Mode.DELTA);
+    private ReaderClock clock = new ReaderClock(-1, ReaderClock.Mode.DELTA, null);
     private final Set<Integer> disabledAntennas = ConcurrentHashMap.newKeySet();
 
     // What we learned from the reader on the last connect
@@ -257,7 +258,8 @@ public class Zebra implements RFIDReader {
         z.session = clamp(z.readerID, "Session", config.optInt("Session", 1), 0, 3);
         z.tagPopulation = clamp(z.readerID, "Tag Population", config.optInt("Tag Population", 128), 1, 65535);
         z.dwellMs = clamp(z.readerID, "Dwell", config.optInt("Dwell", 500), 50, 60000);
-        z.clock = new ZebraClock(z.readerID, ZebraClock.Mode.fromConfig(config.optString("Clock", "Delta")));
+        z.clock = new ReaderClock(z.readerID, clockModeFromConfig(config.optString("Clock", ""), z.readerID),
+                "Is NTP configured and working on the reader? Set \"Clock\": \"Delta\" to use the Pi's clock instead.");
 
         JSONObject antennaConfig = config.optJSONObject("Antenna Config");
         if (antennaConfig != null) {
@@ -277,6 +279,24 @@ public class Zebra implements RFIDReader {
         z.monitor = new ZebraConnectionMonitor(z);
         Thread.ofVirtual().name("Zebra-" + z.readerID + "-Monitor").start(z.monitor);
         return z;
+    }
+
+    /**
+     * "Clock": "NTP" trusts the reader's own clock. "Delta" (the default, with
+     * "Pi" as an alias) corrects every read to the Pi's clock.
+     */
+    static ReaderClock.Mode clockModeFromConfig(String s, Integer readerID) {
+        if (s == null || s.isBlank()) {
+            return ReaderClock.Mode.DELTA;
+        }
+        String v = s.trim();
+        if (v.equalsIgnoreCase("NTP")) {
+            return ReaderClock.Mode.READER;
+        }
+        if (!v.equalsIgnoreCase("Delta") && !v.equalsIgnoreCase("Pi")) {
+            logger.warn("Unknown \"Clock\" setting '{}' for reader {}. Using Delta (Pi time).", s, readerID);
+        }
+        return ReaderClock.Mode.DELTA;
     }
 
     private static int clamp(Integer readerID, String key, int value, int min, int max) {
@@ -439,7 +459,7 @@ public class Zebra implements RFIDReader {
                     general.getReaderFirmwareVersion(), maxAntennas, hasUTCClock);
         }
 
-        if (!hasUTCClock && clock.getMode() == ZebraClock.Mode.NTP) {
+        if (!hasUTCClock && clock.getMode() == ReaderClock.Mode.READER) {
             logger.warn("Reader {} does not report a UTC clock, so NTP clock mode may not work. Consider \"Clock\": \"Delta\".", readerID);
         }
 
@@ -1133,7 +1153,8 @@ public class Zebra implements RFIDReader {
         // LLRP has no way to set a Zebra reader's clock. In Delta mode we
         // measure the offset to the Pi's clock instead. In NTP mode we trust
         // (and keep checking) the reader's own NTP-synced clock.
-        logger.info("Reader {} ({}) clock mode {}: {}", readerID, readerIP, clock.getMode(), clock.describe());
+        logger.info("Reader {} ({}) clock mode {}: {}", readerID, readerIP,
+                clock.getMode() == ReaderClock.Mode.READER ? "NTP" : "Delta", clock.describe());
     }
 
     /*

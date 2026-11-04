@@ -16,6 +16,8 @@
  */
 package com.pikatimer.pikareader.readers.zebra;
 
+import com.pikatimer.pikareader.readers.ReaderClock;
+
 import org.llrp.ltk.generated.enumerations.AntennaEventType;
 import org.llrp.ltk.generated.enumerations.ROSpecEventType;
 import org.llrp.ltk.generated.enumerations.StatusCode;
@@ -51,11 +53,11 @@ public class ZebraMessageHandler implements LLRPEndpoint {
 
     private final Zebra reader;
     private final ZebraTagReportHandler tagReportHandler;
-    private final ZebraClock clock;
+    private final ReaderClock clock;
 
     private volatile long lastMessageNanos = System.nanoTime();
 
-    public ZebraMessageHandler(Zebra reader, ZebraTagReportHandler tagReportHandler, ZebraClock clock) {
+    public ZebraMessageHandler(Zebra reader, ZebraTagReportHandler tagReportHandler, ReaderClock clock) {
         this.reader = reader;
         this.tagReportHandler = tagReportHandler;
         this.clock = clock;
@@ -74,7 +76,7 @@ public class ZebraMessageHandler implements LLRPEndpoint {
 
     @Override
     public void messageReceived(LLRPMessage message) {
-        long piReceiveMicros = ZebraClock.nowMicros();
+        long piReceiveMicros = ReaderClock.nowMicros();
         touch();
 
         try {
@@ -116,9 +118,9 @@ public class ZebraMessageHandler implements LLRPEndpoint {
         // Every reader event carries the reader's clock. Use it as a sample.
         Timestamp ts = data.getTimestamp();
         if (ts instanceof UTCTimestamp utc && utc.getMicroseconds() != null) {
-            clock.sample(ZebraClock.Kind.UTC, utc.getMicroseconds().toLong(), piReceiveMicros);
+            clock.sample(ReaderClock.Kind.UTC, utc.getMicroseconds().toLong(), piReceiveMicros);
         } else if (ts instanceof Uptime up && up.getMicroseconds() != null) {
-            clock.sample(ZebraClock.Kind.UPTIME, up.getMicroseconds().toLong(), piReceiveMicros);
+            clock.sample(ReaderClock.Kind.UPTIME, up.getMicroseconds().toLong(), piReceiveMicros);
         }
 
         if (data.getConnectionAttemptEvent() != null) {

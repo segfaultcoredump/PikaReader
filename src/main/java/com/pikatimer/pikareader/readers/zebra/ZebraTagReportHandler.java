@@ -17,6 +17,7 @@
 package com.pikatimer.pikareader.readers.zebra;
 
 import com.pikatimer.pikareader.conf.PikaConfig;
+import com.pikatimer.pikareader.readers.ReaderClock;
 import com.pikatimer.pikareader.tags.TagRead;
 import com.pikatimer.pikareader.tags.TagReadProcessor;
 import java.time.Instant;
@@ -46,9 +47,9 @@ public class ZebraTagReportHandler {
 
     private final TagReadProcessor tagReadProcessor = TagReadProcessor.getInstance();
     private final Zebra reader;
-    private final ZebraClock clock;
+    private final ReaderClock clock;
 
-    public ZebraTagReportHandler(Zebra reader, ZebraClock clock) {
+    public ZebraTagReportHandler(Zebra reader, ReaderClock clock) {
         this.reader = reader;
         this.clock = clock;
     }
@@ -77,23 +78,23 @@ public class ZebraTagReportHandler {
 
                 // Pull the reader's timestamps. With N=1 reporting First and Last
                 // are normally the same read.
-                ZebraClock.Kind firstKind = null;
+                ReaderClock.Kind firstKind = null;
                 Long first = null;
                 if (t.getFirstSeenTimestampUTC() != null) {
-                    firstKind = ZebraClock.Kind.UTC;
+                    firstKind = ReaderClock.Kind.UTC;
                     first = t.getFirstSeenTimestampUTC().getMicroseconds().toLong();
                 } else if (t.getFirstSeenTimestampUptime() != null) {
-                    firstKind = ZebraClock.Kind.UPTIME;
+                    firstKind = ReaderClock.Kind.UPTIME;
                     first = t.getFirstSeenTimestampUptime().getMicroseconds().toLong();
                 }
 
-                ZebraClock.Kind lastKind = null;
+                ReaderClock.Kind lastKind = null;
                 Long last = null;
                 if (t.getLastSeenTimestampUTC() != null) {
-                    lastKind = ZebraClock.Kind.UTC;
+                    lastKind = ReaderClock.Kind.UTC;
                     last = t.getLastSeenTimestampUTC().getMicroseconds().toLong();
                 } else if (t.getLastSeenTimestampUptime() != null) {
-                    lastKind = ZebraClock.Kind.UPTIME;
+                    lastKind = ReaderClock.Kind.UPTIME;
                     last = t.getLastSeenTimestampUptime().getMicroseconds().toLong();
                 }
 

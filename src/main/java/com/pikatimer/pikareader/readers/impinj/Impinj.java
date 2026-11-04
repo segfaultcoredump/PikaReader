@@ -28,11 +28,14 @@ import com.impinj.octane.RshellEngine;
 import com.impinj.octane.SearchMode;
 import com.impinj.octane.Settings;
 import com.pikatimer.pikareader.readers.RFIDReader;
+import com.pikatimer.pikareader.readers.ReaderClock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 import org.json.JSONObject;
@@ -64,6 +67,19 @@ public class Impinj implements RFIDReader {
     private Integer antennaCount = 0;
     private long lastAntennaUpdateTS = 0L;
 
+    // Inventory settings from the config. A null reader mode means "pick the
+    // default for this reader" (see connect()).
+    private ReaderMode configuredReaderMode = null;
+    private SearchMode searchMode = SearchMode.DualTargetBtoASelect;
+    private int session = 2; // the Octane SDK default
+    private int tagPopulation = 128;
+
+    // "Clock": "Pi" (default) sets the reader's clock from the Pi over SSH.
+    // "Clock": "NTP" leaves the reader's own NTP-synced clock alone.
+    private boolean useNTP = false;
+    // Either way the reader's timestamps are used as-is; this just warns if they're off.
+    private ReaderClock clock = new ReaderClock(-1, ReaderClock.Mode.READER, null);
+
     public Impinj() {
         readerID = -1;
         readerIP = "";
@@ -94,9 +110,15 @@ public class Impinj implements RFIDReader {
 
     @Override
     public void setClock() {
-        // TODO: Check the config to see if we should use NTP
-        // If so, just set it to use NTP and be done with it. 
         logger.trace("Entering Impinj::setClock() for {}", readerIP);
+
+        if (useNTP) {
+            // "Clock": "NTP" -- the reader keeps its own NTP-synced time and
+            // we leave its clock (and its NTP settings) alone
+            logger.info("Reader {} ({}) uses NTP for its clock, so PikaReader will not change it: {}", readerID, readerIP, clock.describe());
+            return;
+        }
+
         try {
 
             logger.info("Setting the clock for {}...", readerIP);
@@ -140,6 +162,9 @@ public class Impinj implements RFIDReader {
             rshell.close();
             logger.info("Clock set for {}", readerIP);
 
+            // Older samples were taken against the old clock
+            clock.reset();
+
         } catch (OctaneSdkException ex) {
             logger.error("OctaneSdkExcepton", ex);
         } catch (Exception ex) {
@@ -148,6 +173,133 @@ public class Impinj implements RFIDReader {
 
         logger.trace("Exiting Impinj::setClock()");
 
+    }
+
+    /**
+     * Log the reader's NTP status (read-only) so it is easy to confirm NTP is
+     * working when "Clock" is "NTP".
+     */
+    private void logNtpStatus() {
+        try {
+            RshellEngine rshell = new RshellEngine();
+            rshell.openSecureSession(readerIP, "root", "impinj", 10000);
+            String reply = rshell.send("show network ntp");
+            rshell.close();
+            logger.info("Reader {} ({}) NTP status:\n{}", readerID, readerIP, reply);
+        } catch (Exception ex) {
+            logger.warn("Reader {} ({}): unable to read the NTP status over SSH ({}). The reader's clock will still be used as-is.",
+                    readerID, readerIP, ex.getMessage());
+        }
+    }
+
+    /*
+     * Config parsing. Names are matched ignoring case, spaces, dashes and
+     * underscores, so "MaxMiller", "max miller" and "MAX_MILLER" all work.
+     */
+    private static String normalize(String s) {
+        return s.trim().replace(" ", "").replace("_", "").replace("-", "").toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * "Reader Mode": an Octane ReaderMode name or Impinj mode number.
+     *
+     * @return the mode, or null to use the default for the reader
+     */
+    static ReaderMode parseReaderMode(String s, Integer readerID) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        String n = normalize(s);
+        ReaderMode mode = null;
+        if (n.matches("\\d+")) {
+            try {
+                mode = ReaderMode.valueOf(Integer.parseInt(n));
+            } catch (Exception ex) {
+                mode = null;
+            }
+        } else {
+            for (ReaderMode m : ReaderMode.values()) {
+                if (normalize(m.name()).equals(n)) {
+                    mode = m;
+                    break;
+                }
+            }
+        }
+
+        if (mode == null) {
+            logger.warn("Unknown Reader Mode '{}' for reader {}. Using the default reader mode.", s, readerID);
+            return null;
+        }
+        if (mode == ReaderMode.AutoSetCustom) {
+            logger.warn("Reader {}: AutoSetCustom needs extra settings PikaReader does not support. Using the default reader mode.", readerID);
+            return null;
+        }
+        if (mode == ReaderMode.MaxThroughput) {
+            logger.warn("Reader {} is set to MaxThroughput. This is usually a poor choice when other readers are nearby.", readerID);
+        }
+        return mode;
+    }
+
+    /**
+     * "Search Mode": an Octane SearchMode name or number. "ReaderDefault" is
+     * accepted as an alias for ReaderSelected to match the Zebra readers.
+     */
+    static SearchMode parseSearchMode(String s, Integer readerID) {
+        if (s == null || s.isBlank()) {
+            return SearchMode.DualTargetBtoASelect;
+        }
+        String n = normalize(s);
+        if (n.equals("readerdefault")) {
+            return SearchMode.ReaderSelected;
+        }
+        SearchMode mode = null;
+        if (n.matches("\\d+")) {
+            try {
+                mode = SearchMode.valueOf(Integer.parseInt(n));
+            } catch (Exception ex) {
+                mode = null;
+            }
+        } else {
+            for (SearchMode m : SearchMode.values()) {
+                if (normalize(m.name()).equals(n)) {
+                    mode = m;
+                    break;
+                }
+            }
+        }
+        if (mode == null) {
+            logger.warn("Unknown Search Mode '{}' for reader {}. Using DualTargetBtoASelect.", s, readerID);
+            return SearchMode.DualTargetBtoASelect;
+        }
+        return mode;
+    }
+
+    /**
+     * "Clock": "Pi" (default, "Delta" is accepted as an alias) or "NTP".
+     *
+     * @return true for NTP
+     */
+    static boolean parseUseNTP(String s, Integer readerID) {
+        if (s == null || s.isBlank()) {
+            return false;
+        }
+        String v = s.trim();
+        if (v.equalsIgnoreCase("NTP")) {
+            return true;
+        }
+        if (!v.equalsIgnoreCase("Pi") && !v.equalsIgnoreCase("Delta")) {
+            logger.warn("Unknown \"Clock\" setting '{}' for reader {}. Using Pi (PikaReader sets the reader's clock).", s, readerID);
+        }
+        return false;
+    }
+
+    private static int clamp(Integer readerID, String key, int value, int min, int max) {
+        if (value < min || value > max) {
+            int v = Math.max(min, Math.min(max, value));
+            logger.warn("Reader {}: \"{}\" must be between {} and {}. Using {}.", readerID, key, min, max, v);
+            return v;
+        }
+        return value;
     }
 
     @Override
@@ -170,8 +322,17 @@ public class Impinj implements RFIDReader {
 
                 FeatureSet features = reader.queryFeatureSet();
                 antennaCount = Long.valueOf(features.getAntennaCount()).intValue();
+                List<ReaderMode> supportedModes = features.getReaderModes();
+                logger.info("Impinj reader {}: {} firmware {}, {} antenna ports, supported reader modes: {}",
+                        readerID, features.getModelName(), features.getFirmwareVersion(), antennaCount, supportedModes);
+
+                // The reader may have rebooted or had its clock changed while we were away
+                clock.reset();
 
                 // Make sure the reader's time is correct
+                if (useNTP) {
+                    logNtpStatus();
+                }
                 setClock();
 
                 reader.setReaderStartListener(new ImpinjReaderStartStopListener(this));
@@ -191,25 +352,36 @@ public class Impinj implements RFIDReader {
                 report.setIncludeSeenCount(Boolean.FALSE);
                 //settings.setReport(report);
 
-                // We will default to the static fast mode 
-                // as we have a dynamic tag environment and want a faster
-                // read rate at the cost of a slight loss of range
-                // See https://support.impinj.com/hc/en-us/articles/360000046899
-                // AutoSetStaticFast is not available on 1 and 2 port readers
-                // so fall back to AutoSetDenseReader
-                if (antennaCount > 2) {
-                    settings.setReaderMode(ReaderMode.AutoSetStaticFast);
-                } else {
-                    settings.setReaderMode(ReaderMode.AutoSetDenseReader);
+                // Use the configured reader mode if this reader supports it.
+                // The AutoSet modes are not checked because the SDK may not
+                // list them, even on readers that support them.
+                ReaderMode mode = configuredReaderMode;
+                if (mode != null && mode.getValue() < 1000 && supportedModes != null
+                        && !supportedModes.isEmpty() && !supportedModes.contains(mode)) {
+                    logger.warn("Reader {} does not list {} as a supported reader mode. Using the default instead.", readerID, mode.name());
+                    mode = null;
                 }
+                if (mode == null) {
+                    // We will default to the static fast mode
+                    // as we have a dynamic tag environment and want a faster
+                    // read rate at the cost of a slight loss of range
+                    // See https://support.impinj.com/hc/en-us/articles/360000046899
+                    // AutoSetStaticFast is not available on 1 and 2 port readers
+                    // so fall back to AutoSetDenseReader
+                    mode = antennaCount > 2 ? ReaderMode.AutoSetStaticFast : ReaderMode.AutoSetDenseReader;
+                }
+                settings.setReaderMode(mode);
 
-                // We don't want to miss new tags in the 'A' state entering
-                // the field when we are inventorying the 'B' tags
-                // So we will go with the Dual Target B -> A Select mode
+                // By default we don't want to miss new tags in the 'A' state
+                // entering the field when we are inventorying the 'B' tags
+                // So we go with the Dual Target B -> A Select mode
                 // See https://support.impinj.com/hc/en-us/articles/202756158
-                settings.setSearchMode(SearchMode.DualTargetBtoASelect);
-                //settings.setSession(1);
-                settings.setTagPopulationEstimate(128);
+                settings.setSearchMode(searchMode);
+                settings.setSession(session);
+                settings.setTagPopulationEstimate(tagPopulation);
+
+                logger.info("Reader {} inventory: reader mode {}, search mode {}, session {}, tag population {}, clock {}",
+                        readerID, mode.name(), searchMode.name(), session, tagPopulation, useNTP ? "NTP" : "Pi");
 
                 // Enable keepalivbes
                 settings.getKeepalives().setEnabled(true);
@@ -256,7 +428,7 @@ public class Impinj implements RFIDReader {
                 }
                 
                
-                reader.setTagReportListener(new ImpinjTagReportListener(readerID));
+                reader.setTagReportListener(new ImpinjTagReportListener(readerID, clock));
 
                 
                 reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
@@ -361,6 +533,15 @@ public class Impinj implements RFIDReader {
         newReader.readerID = config.optInt("Index", 1);
         newReader.readerIP = config.optString("IP", "127.0.0.1");
         newReader.readerConfig = config;
+
+        newReader.configuredReaderMode = parseReaderMode(config.optString("Reader Mode", ""), newReader.readerID);
+        newReader.searchMode = parseSearchMode(config.optString("Search Mode", ""), newReader.readerID);
+        newReader.session = clamp(newReader.readerID, "Session", config.optInt("Session", 2), 0, 3);
+        newReader.tagPopulation = clamp(newReader.readerID, "Tag Population", config.optInt("Tag Population", 128), 1, 65535);
+        newReader.useNTP = parseUseNTP(config.optString("Clock", ""), newReader.readerID);
+        newReader.clock = new ReaderClock(newReader.readerID, ReaderClock.Mode.READER, newReader.useNTP
+                ? "Is NTP configured and working on the reader? Set \"Clock\": \"Pi\" to have PikaReader set the reader's clock instead."
+                : "PikaReader sets this reader's clock over SSH, so check the log for errors from setting the clock. If the reader uses NTP, set \"Clock\": \"NTP\".");
 
         logger.info("Created new IMPINJ Reader with the following config: {}", config.toString(4));
 

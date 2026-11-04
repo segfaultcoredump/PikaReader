@@ -26,6 +26,7 @@ import com.impinj.octane.Tag;
 import com.impinj.octane.TagReport;
 import com.impinj.octane.TagReportListener;
 import com.pikatimer.pikareader.conf.PikaConfig;
+import com.pikatimer.pikareader.readers.ReaderClock;
 import com.pikatimer.pikareader.tags.TagReadProcessor;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -43,14 +44,18 @@ public class ImpinjTagReportListener implements TagReportListener {
 
     private final TagReadProcessor tagReadProcessor = TagReadProcessor.getInstance();
     private Integer readerID = -1;
+    private final ReaderClock clock;
 
-    public ImpinjTagReportListener(Integer readerID) {
+    public ImpinjTagReportListener(Integer readerID, ReaderClock clock) {
         this.readerID = readerID;
-
+        this.clock = clock;
     }
 
     @Override
     public void onTagReported(ImpinjReader reader, TagReport report) {
+        // When the report reached us, used to check the reader's clock
+        long piReceiveMicros = ReaderClock.nowMicros();
+
         List<Tag> tags = report.getTags();
 
         ZoneId zoneId = PikaConfig.getInstance().getTimezoneId();
@@ -85,6 +90,12 @@ public class ImpinjTagReportListener implements TagReportListener {
 
             // Impinj returns a Date object in UTC, So we get to convert it. 
             Instant timestamp = t.getFirstSeenTime().getLocalDateTime().toInstant();
+
+            // The reader's timestamp is used as-is, but warn if the reader's
+            // clock has drifted away from the Pi's (NTP or the SSH clock set failed)
+            if (clock != null) {
+                clock.sample(ReaderClock.Kind.UTC, timestamp.toEpochMilli() * 1000L, piReceiveMicros);
+            }
 
             tr.setEpochMilli(timestamp.toEpochMilli());
             tr.setTZOffset(ZonedDateTime.ofInstant(timestamp, zoneId).getOffset().toString());

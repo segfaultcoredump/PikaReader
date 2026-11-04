@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-package com.pikatimer.pikareader.readers.zebra;
+package com.pikatimer.pikareader.readers;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -22,43 +22,36 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracks the offset between a Zebra reader's internal clock and the Pi's clock.
+ * Tracks the offset between an RFID reader's internal clock and the Pi's clock.
  *
- * LLRP has no "what time is it" request. The only places the reader exposes its
- * clock are the timestamps it puts on READER_EVENT_NOTIFICATIONs and tag
+ * The reader's clock shows up in the timestamps it puts on events and tag
  * reports. Each of those gives us a sample of (Pi receive time - reader time),
  * which is the true clock offset plus the (always positive) delivery latency.
  * The minimum sample over a sliding window is therefore a good estimate of the
  * true offset, and it tracks reader clock drift over the course of a race.
  *
- * In DELTA mode (the default) every tag timestamp is shifted onto the Pi's
- * clock. In NTP mode the reader's own UTC timestamps are trusted as-is, but the
- * offset is still tracked so we can warn if the reader's NTP isn't working.
+ * In DELTA mode every tag timestamp is shifted onto the Pi's clock. In READER
+ * mode the reader's own UTC timestamps are used as-is (because the reader is
+ * on NTP, or its clock was set from the Pi), but the offset is still tracked
+ * so we can warn if the reader's clock is wrong.
  *
  * One instance per reader; every reader drifts differently.
  *
  * @author John Garner <segfaultcoredump@gmail.com>
  */
-public class ZebraClock {
+public class ReaderClock {
 
-    private static final Logger logger = LoggerFactory.getLogger(ZebraClock.class);
+    private static final Logger logger = LoggerFactory.getLogger(ReaderClock.class);
 
     public enum Mode {
-        DELTA, NTP;
-
-        public static Mode fromConfig(String s) {
-            if (s != null && s.trim().equalsIgnoreCase("NTP")) {
-                return NTP;
-            }
-            if (s != null && !s.isBlank() && !s.trim().equalsIgnoreCase("Delta")) {
-                logger.warn("Unknown Zebra \"Clock\" setting '{}'. Using Delta (Pi time).", s);
-            }
-            return DELTA;
-        }
+        // Correct every reader timestamp to the Pi's clock
+        DELTA,
+        // Use the reader's UTC timestamps as-is, but warn if they are off
+        READER
     }
 
     /**
-     * LLRP timestamps are either UTC (microseconds since the epoch) or Uptime
+     * Reader timestamps are either UTC (microseconds since the epoch) or Uptime
      * (microseconds since the reader booted). Each kind gets its own estimator.
      */
     public enum Kind {
@@ -66,21 +59,27 @@ public class ZebraClock {
     }
 
     private static final long WINDOW_SECONDS = 60;
-    private static final long NTP_WARN_MICROS = 1_000_000L;
-    private static final long NTP_WARN_INTERVAL_MICROS = 60_000_000L;
+    private static final long SKEW_WARN_MICROS = 1_000_000L;
+    private static final long SKEW_WARN_INTERVAL_MICROS = 60_000_000L;
     private static final long CHANGE_LOG_MICROS = 100_000L;
 
     private final Integer readerID;
     private final Mode mode;
+    private final String skewAdvice;
     private final Estimator utc = new Estimator(Kind.UTC);
     private final Estimator uptime = new Estimator(Kind.UPTIME);
 
-    private long lastNtpWarnMicros = Long.MIN_VALUE / 2;
-    private boolean warnedUptimeInNtpMode = false;
+    private long lastSkewWarnMicros = Long.MIN_VALUE / 2;
+    private boolean warnedUptimeInReaderMode = false;
 
-    public ZebraClock(Integer readerID, Mode mode) {
+    /**
+     * @param skewAdvice appended to the warning logged in READER mode when the
+     * reader's clock is more than a second off
+     */
+    public ReaderClock(Integer readerID, Mode mode, String skewAdvice) {
         this.readerID = readerID;
         this.mode = mode;
+        this.skewAdvice = skewAdvice == null ? "" : skewAdvice;
     }
 
     public Mode getMode() {
@@ -102,7 +101,7 @@ public class ZebraClock {
     public synchronized void reset() {
         utc.reset();
         uptime.reset();
-        warnedUptimeInNtpMode = false;
+        warnedUptimeInReaderMode = false;
     }
 
     /**
@@ -110,8 +109,8 @@ public class ZebraClock {
      */
     public synchronized void sample(Kind kind, long readerMicros, long piReceiveMicros) {
         estimator(kind).add(piReceiveMicros - readerMicros, piReceiveMicros);
-        if (kind == Kind.UTC && mode == Mode.NTP) {
-            checkNtp(piReceiveMicros);
+        if (kind == Kind.UTC && mode == Mode.READER) {
+            checkSkew(piReceiveMicros);
         }
     }
 
@@ -119,12 +118,12 @@ public class ZebraClock {
      * Convert a reader timestamp into Pi epoch microseconds.
      */
     public synchronized long toEpochMicros(Kind kind, long readerMicros, long piReceiveMicros) {
-        if (kind == Kind.UTC && mode == Mode.NTP) {
+        if (kind == Kind.UTC && mode == Mode.READER) {
             return readerMicros;
         }
-        if (kind == Kind.UPTIME && mode == Mode.NTP && !warnedUptimeInNtpMode) {
-            logger.warn("Reader {} reports uptime-based timestamps, so NTP clock mode is not possible. Using the Pi clock delta instead.", readerID);
-            warnedUptimeInNtpMode = true;
+        if (kind == Kind.UPTIME && mode == Mode.READER && !warnedUptimeInReaderMode) {
+            logger.warn("Reader {} reports uptime-based timestamps, so its clock can't be used as-is. Using the Pi clock delta instead.", readerID);
+            warnedUptimeInReaderMode = true;
         }
         Long offset = estimator(kind).estimate;
         if (offset == null) {
@@ -144,7 +143,7 @@ public class ZebraClock {
 
     public synchronized String describe() {
         if (utc.estimate != null) {
-            return describeOffset(utc.estimate) + (mode == Mode.NTP ? " (reader time is used as-is)" : " (tag times are corrected to Pi time)");
+            return describeOffset(utc.estimate) + (mode == Mode.READER ? " (reader time is used as-is)" : " (tag times are corrected to Pi time)");
         }
         if (uptime.estimate != null) {
             return "reader uses uptime timestamps; offset to Pi clock is " + String.format("%.3f", uptime.estimate / 1_000_000.0) + " s";
@@ -164,12 +163,11 @@ public class ZebraClock {
         return kind == Kind.UTC ? utc : uptime;
     }
 
-    private void checkNtp(long piMicros) {
+    private void checkSkew(long piMicros) {
         Long offset = utc.estimate;
-        if (offset != null && Math.abs(offset) > NTP_WARN_MICROS && piMicros - lastNtpWarnMicros > NTP_WARN_INTERVAL_MICROS) {
-            logger.warn("Reader {} is in NTP clock mode but its {}. Is NTP configured and working on the reader? "
-                    + "Set \"Clock\": \"Delta\" to use the Pi's clock instead.", readerID, describeOffset(offset));
-            lastNtpWarnMicros = piMicros;
+        if (offset != null && Math.abs(offset) > SKEW_WARN_MICROS && piMicros - lastSkewWarnMicros > SKEW_WARN_INTERVAL_MICROS) {
+            logger.warn("Reader {}: {}. {}", readerID, describeOffset(offset), skewAdvice);
+            lastSkewWarnMicros = piMicros;
         }
     }
 
