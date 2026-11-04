@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,10 +48,11 @@ public class TagReadProcessor implements Runnable {
 
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd' 'HH:mm:ss.SSS");
 
-    Map<String, TagRead> seenTags = new HashMap<>();
+    // processTagRead() is called concurrently from every reader's IO thread
+    Map<String, TagRead> seenTags = new ConcurrentHashMap<>();
     Integer defaultGating = 3000;
 
-    private Thread tagProcessingThread;
+    private volatile Thread tagProcessingThread;
 
     /**
      * SingletonHolder is loaded on the first execution of
@@ -158,16 +160,19 @@ public class TagReadProcessor implements Runnable {
     public void processTagRead(TagRead tr) {
         logger.trace("Entering TagDAO::processTagRead");
 
-        // Start the tag processing thread
+        // Start the tag processing thread. Exactly one, even when several
+        // readers deliver their first reads at the same moment.
         if (tagProcessingThread == null) {
-
-            tagProcessingThread = new Thread(TagReadProcessor.getInstance());
-            tagProcessingThread.setName("TagProcessingThread");
-            tagProcessingThread.setDaemon(true);
-            tagProcessingThread.setPriority(1);
-
-            tagProcessingThread.start();
-
+            synchronized (this) {
+                if (tagProcessingThread == null) {
+                    Thread t = new Thread(TagReadProcessor.getInstance());
+                    t.setName("TagProcessingThread");
+                    t.setDaemon(true);
+                    t.setPriority(1);
+                    t.start();
+                    tagProcessingThread = t;
+                }
+            }
         }
 
         logger.debug("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);

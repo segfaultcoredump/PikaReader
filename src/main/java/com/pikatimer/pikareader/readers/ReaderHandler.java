@@ -20,8 +20,11 @@ import com.pikatimer.pikareader.conf.PikaConfig;
 import com.pikatimer.pikareader.status.StatusHandler;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
@@ -38,7 +41,8 @@ public class ReaderHandler {
     private static final Logger logger = LoggerFactory.getLogger(ReaderHandler.class);
 
     private static final PikaConfig pikaConfig = PikaConfig.getInstance();
-    private static final Map<Integer, RFIDReader> readers = new HashMap<>();
+    // Filled concurrently by the virtual threads that create each reader
+    private static final Map<Integer, RFIDReader> readers = new ConcurrentHashMap<>();
     private static final Map<String, RFIDReader> rfidReaderFactory = new HashMap<>();
 
     private final JSONObject readerConfig;
@@ -96,12 +100,16 @@ public class ReaderHandler {
 
         // itterate through the readers and set them up
         CountDownLatch latch = new CountDownLatch(readerConfig.getJSONArray("Readers").length());
+        Set<Integer> seenIndexes = new HashSet<>();
         readerConfig.getJSONArray("Readers").forEach(r -> {
             JSONObject rc = (JSONObject) r; // FFS
             Integer index = rc.getInt("Index");
             String type = rc.optString("Type", "NOT SET");
 
-            if (rfidReaderFactory.containsKey(type)) {
+            if (!seenIndexes.add(index)) {
+                logger.error("RFID Reader Config Error! More than one reader uses Index {}. Each reader needs a unique Index. Ignoring the duplicate {} reader.", index, type);
+                latch.countDown();
+            } else if (rfidReaderFactory.containsKey(type)) {
                 Thread.startVirtualThread(() -> {
                     RFIDReader reader = rfidReaderFactory.get(type).create(rc);
                     readers.put(index, reader);
