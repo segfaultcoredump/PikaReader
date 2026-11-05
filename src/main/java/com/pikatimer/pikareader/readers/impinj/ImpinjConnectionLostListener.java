@@ -18,7 +18,6 @@ package com.pikatimer.pikareader.readers.impinj;
 
 import com.impinj.octane.ConnectionLostListener;
 import com.impinj.octane.ImpinjReader;
-import com.impinj.octane.OctaneSdkException;
 import com.pikatimer.pikareader.readers.ReaderHandler;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +34,7 @@ public class ImpinjConnectionLostListener implements ConnectionLostListener {
         this.reader = reader;
     }
 
-    // TODO:  Update parent Impinj impinjReader connected status. 
+    // TODO:  Update parent Impinj impinjReader connected status.
     // Let it handle the reconnect and then resume reading if it was in reading mode
     @Override
     public void onConnectionLost(ImpinjReader impinjReader) {
@@ -46,11 +45,11 @@ public class ImpinjConnectionLostListener implements ConnectionLostListener {
 
         Integer retryLimit = 50;
 
-        while (retryLimit-- > 0 && !impinjReader.isConnected()) {
-            try {
-                impinjReader.connect();
-                impinjReader.disconnect();
-                reader.connect();
+        // Reconnect through Impinj.connect(), which uses the configured port
+        // and TLS setting and re-applies all of the reader settings. (The
+        // SDK's own no-argument connect() always uses plain LLRP on 5084.)
+        while (retryLimit-- > 0) {
+            if (reader.connect()) {
                 logger.info("Reconnected to {}",reader.getIP());
                 logger.info("Reconnected reader status: Reading {}", reader.isReading());
                 if (ReaderHandler.getInstance().isReading()) {
@@ -59,15 +58,17 @@ public class ImpinjConnectionLostListener implements ConnectionLostListener {
                     reader.startReading();
                     logger.info("Done restarting {}",reader.getIP());
                 }
-            } catch (OctaneSdkException ex) {
-                logger.info("Reconnect timeout. Sleeping 15 seconds and will Try again...");
-                try {
-                    Thread.sleep(10000);
-                } catch (InterruptedException ex1) {
-                    logger.error("Retry Thread Interrupted!", ex1);
-                }
+                return;
+            }
+            logger.info("Unable to reconnect to {}. Sleeping 10 seconds and will try again...", reader.getIP());
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException ex1) {
+                logger.error("Retry Thread Interrupted!", ex1);
+                return;
             }
         }
+        logger.error("Giving up on reconnecting to {} for now", reader.getIP());
     }
 
 }

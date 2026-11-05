@@ -92,7 +92,7 @@ public class ImpinjTagReportListener implements TagReportListener {
             Instant timestamp = t.getFirstSeenTime().getLocalDateTime().toInstant();
 
             // The reader's timestamp is used as-is, but warn if the reader's
-            // clock has drifted away from the Pi's (NTP or the SSH clock set failed)
+            // clock has drifted away from the local clock (NTP or the SSH clock set failed)
             if (clock != null) {
                 clock.sample(ReaderClock.Kind.UTC, timestamp.toEpochMilli() * 1000L, piReceiveMicros);
             }

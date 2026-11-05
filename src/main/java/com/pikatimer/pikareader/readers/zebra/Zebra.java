@@ -17,6 +17,7 @@
 package com.pikatimer.pikareader.readers.zebra;
 
 import com.google.auto.service.AutoService;
+import com.pikatimer.pikareader.readers.LlrpTls;
 import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderClock;
 import com.pikatimer.pikareader.readers.impinj.ImpinjPowerLevels;
@@ -32,7 +33,11 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.SSLSession;
 import org.apache.mina.core.session.IoSession;
+import org.apache.mina.filter.FilterEvent;
+import org.apache.mina.filter.ssl.SslEvent;
+import org.apache.mina.filter.ssl.SslFilter;
 import org.json.JSONObject;
 import org.llrp.ltk.generated.enumerations.AISpecStopTriggerType;
 import org.llrp.ltk.generated.enumerations.AirProtocols;
@@ -133,7 +138,7 @@ public class Zebra implements RFIDReader {
     private static final Logger logger = LoggerFactory.getLogger(Zebra.class);
 
     static final int ROSPEC_ID = 1;
-    static final int DEFAULT_PORT = 5084;
+    static final int DEFAULT_PORT = LlrpTls.PORT;
     private static final int KEEPALIVE_MS = 3000;
     private static final long LINK_TIMEOUT_MS = 3L * KEEPALIVE_MS;
     private static final long CONNECT_TIMEOUT_MS = 10_000;
@@ -197,6 +202,7 @@ public class Zebra implements RFIDReader {
     private Integer readerID = -1;
     private String readerIP = "";
     private int readerPort = DEFAULT_PORT;
+    private boolean useTls = false;
     private JSONObject readerConfig = new JSONObject();
     private SearchMode searchMode = SearchMode.DUAL_TARGET;
     private int session = 1;
@@ -229,6 +235,9 @@ public class Zebra implements RFIDReader {
     private volatile boolean reading = false;
     private volatile boolean wantReading = false;
     private volatile String linkError = null;
+    // The last error the LTK reported while connecting (e.g. a TLS handshake
+    // failure), which otherwise only shows up as a connect timeout
+    private volatile String connectError = null;
     private volatile long lastAntennaPollSec = 0;
     private volatile long lastStartNanos = 0;
     private volatile long lastStartAttemptNanos = 0;
@@ -251,15 +260,20 @@ public class Zebra implements RFIDReader {
         Zebra z = new Zebra();
         z.readerID = config.optInt("Index", 1);
         z.readerIP = config.optString("IP", "127.0.0.1");
-        z.readerPort = config.optInt("Port", DEFAULT_PORT);
+        z.useTls = LlrpTls.useTls(config);
+        z.readerPort = LlrpTls.port(config, z.useTls);
         z.readerConfig = config;
+        if (z.useTls) {
+            // Before the monitor thread below makes the first TLS connection
+            LlrpTls.allowLegacyCertificates();
+        }
         z.searchMode = SearchMode.fromConfig(config.optString("Search Mode", ""), z.readerID);
         z.activeSearchMode = z.searchMode;
         z.session = clamp(z.readerID, "Session", config.optInt("Session", 1), 0, 3);
         z.tagPopulation = clamp(z.readerID, "Tag Population", config.optInt("Tag Population", 128), 1, 65535);
         z.dwellMs = clamp(z.readerID, "Dwell", config.optInt("Dwell", 500), 50, 60000);
         z.clock = new ReaderClock(z.readerID, clockModeFromConfig(config.optString("Clock", ""), z.readerID),
-                "Is NTP configured and working on the reader? Set \"Clock\": \"Delta\" to use the Pi's clock instead.");
+                "Is NTP configured and working on the reader? Set \"Clock\": \"Delta\" to use the local clock instead.");
 
         JSONObject antennaConfig = config.optJSONObject("Antenna Config");
         if (antennaConfig != null) {
@@ -283,7 +297,7 @@ public class Zebra implements RFIDReader {
 
     /**
      * "Clock": "NTP" trusts the reader's own clock. "Delta" (the default, with
-     * "Pi" as an alias) corrects every read to the Pi's clock.
+     * "Local" and "Pi" as aliases) corrects every read to the local clock.
      */
     static ReaderClock.Mode clockModeFromConfig(String s, Integer readerID) {
         if (s == null || s.isBlank()) {
@@ -293,8 +307,8 @@ public class Zebra implements RFIDReader {
         if (v.equalsIgnoreCase("NTP")) {
             return ReaderClock.Mode.READER;
         }
-        if (!v.equalsIgnoreCase("Delta") && !v.equalsIgnoreCase("Pi")) {
-            logger.warn("Unknown \"Clock\" setting '{}' for reader {}. Using Delta (Pi time).", s, readerID);
+        if (!v.equalsIgnoreCase("Delta") && !v.equalsIgnoreCase("Local") && !v.equalsIgnoreCase("Pi")) {
+            logger.warn("Unknown \"Clock\" setting '{}' for reader {}. Using Delta (local time).", s, readerID);
         }
         return ReaderClock.Mode.DELTA;
     }
@@ -360,13 +374,17 @@ public class Zebra implements RFIDReader {
     }
 
     private boolean doConnect() {
-        logger.info("Connecting to Zebra reader {} at {}:{}", readerID, readerIP, readerPort);
+        String tls = useTls ? " (TLS)" : "";
+        logger.info("Connecting to Zebra reader {} at {}:{}{}", readerID, readerIP, readerPort, tls);
 
         clock.reset();
         linkError = null;
+        connectError = null;
 
         ZebraMessageHandler h = new ZebraMessageHandler(this, new ZebraTagReportHandler(this, clock), clock);
         LLRPConnector c = new LLRPConnector(h, readerIP, readerPort) {
+            // Deprecated, but LTK 13 still calls it from send() and transact()
+            @SuppressWarnings("deprecation")
             @Override
             public boolean reconnect() {
                 // The LTK will try to silently reconnect from inside send() and
@@ -376,11 +394,21 @@ public class Zebra implements RFIDReader {
         };
         // The stock LTK IO handler never reports a closed session, so a reader
         // reboot would only be noticed when keepalives stop. Hook it.
+        // (It does answer each KEEPALIVE with a KEEPALIVE_ACK on its own, and
+        // since LTK 13 the ACK carries the KEEPALIVE's message ID.)
         LLRPIoHandlerAdapterImpl ioHandler = new LLRPIoHandlerAdapterImpl(c) {
             @Override
             public void sessionClosed(IoSession session) throws Exception {
                 super.sessionClosed(session);
                 h.errorOccured("LLRP session closed");
+            }
+
+            @Override
+            public void event(IoSession session, FilterEvent event) throws Exception {
+                if (event == SslEvent.SECURED && session.getAttribute(SslFilter.SSL_SECURED) instanceof SSLSession ssl) {
+                    logger.info("Reader {} TLS session established: {} {}", readerID, ssl.getProtocol(), ssl.getCipherSuite());
+                }
+                super.event(session, event);
             }
         };
         ioHandler.setKeepAliveForward(true);
@@ -389,7 +417,7 @@ public class Zebra implements RFIDReader {
         connection = c;
 
         try {
-            c.connect(CONNECT_TIMEOUT_MS);
+            c.connect(CONNECT_TIMEOUT_MS, useTls);
 
             readCapabilities();
             configureReader();
@@ -411,26 +439,26 @@ public class Zebra implements RFIDReader {
             h.touch();
             warnedNoKeepalives = false;
             connected = true;
-            logger.info("Connected to Zebra reader {} at {}:{}", readerID, readerIP, readerPort);
+            logger.info("Connected to Zebra reader {} at {}:{}{}", readerID, readerIP, readerPort, tls);
 
             setClock();
             return true;
 
         } catch (LLRPConnectionAttemptFailedException ex) {
-            logger.error("Unable to connect to Zebra reader {} at {}:{}: {}", readerID, readerIP, readerPort, ex.getMessage());
+            logger.error("Unable to connect to Zebra reader {} at {}:{}{}: {}{}", readerID, readerIP, readerPort, tls, ex.getMessage(), connectErrorSuffix());
             if (ex.getMessage() != null && ex.getMessage().contains("Already_Exists")) {
                 logger.error("Another LLRP client is already connected to reader {}. Disconnect it and PikaReader will keep retrying.", readerID);
             }
         } catch (ZebraException ex) {
-            logger.error("Unable to configure Zebra reader {}: {}", readerID, ex.getMessage());
+            logger.error("Unable to configure Zebra reader {}: {}{}", readerID, ex.getMessage(), connectErrorSuffix());
         } catch (Exception ex) {
             // MINA wraps the useful part ("Connection refused", "No route to host")
             Throwable root = ex;
             while (root.getCause() != null && root.getCause() != root) {
                 root = root.getCause();
             }
-            logger.error("Unable to connect to Zebra reader {} at {}:{}: {}", readerID, readerIP, readerPort,
-                    root.getMessage() != null ? root.getMessage() : root.toString());
+            logger.error("Unable to connect to Zebra reader {} at {}:{}{}: {}{}", readerID, readerIP, readerPort, tls,
+                    root.getMessage() != null ? root.getMessage() : root.toString(), connectErrorSuffix());
             logger.debug("Connect exception", ex);
         }
 
@@ -1059,15 +1087,28 @@ public class Zebra implements RFIDReader {
         if (error == null) {
             return;
         }
+        // Since LTK 13 errors from the IO layer arrive as
+        // "<exception class> : <message>", e.g.
+        // "java.io.IOException : Connection reset by peer"
         String e = error.toLowerCase();
         boolean fatal = e.contains("ioexception") || e.contains("closed") || e.contains("reset")
+                || e.contains("broken pipe") || e.contains("ssl") || e.contains("handshake")
                 || e.contains("not yet connected") || e.contains("not yet established");
-        if (fatal && from == handler && connected) {
+        if (from == handler && !connected) {
+            // Still connecting: doConnect() reports this with the failure
+            connectError = error;
+            logger.debug("Reader {} error while connecting: {}", readerID, error);
+        } else if (fatal && from == handler) {
             logger.warn("Reader {} link error: {}", readerID, error);
             linkError = error;
         } else {
             logger.warn("Reader {} LLRP error: {}", readerID, error);
         }
+    }
+
+    private String connectErrorSuffix() {
+        String e = connectError;
+        return e == null ? "" : " (" + e + ")";
     }
 
     /*
@@ -1151,7 +1192,7 @@ public class Zebra implements RFIDReader {
     @Override
     public void setClock() {
         // LLRP has no way to set a Zebra reader's clock. In Delta mode we
-        // measure the offset to the Pi's clock instead. In NTP mode we trust
+        // measure the offset to the local clock instead. In NTP mode we trust
         // (and keep checking) the reader's own NTP-synced clock.
         logger.info("Reader {} ({}) clock mode {}: {}", readerID, readerIP,
                 clock.getMode() == ReaderClock.Mode.READER ? "NTP" : "Delta", clock.describe());

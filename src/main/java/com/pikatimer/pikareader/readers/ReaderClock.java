@@ -22,17 +22,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracks the offset between an RFID reader's internal clock and the Pi's clock.
+ * Tracks the offset between an RFID reader's internal clock and the local clock (the computer running PikaReader).
  *
  * The reader's clock shows up in the timestamps it puts on events and tag
- * reports. Each of those gives us a sample of (Pi receive time - reader time),
+ * reports. Each of those gives us a sample of (local receive time - reader time),
  * which is the true clock offset plus the (always positive) delivery latency.
  * The minimum sample over a sliding window is therefore a good estimate of the
  * true offset, and it tracks reader clock drift over the course of a race.
  *
- * In DELTA mode every tag timestamp is shifted onto the Pi's clock. In READER
+ * In DELTA mode every tag timestamp is shifted onto the local clock. In READER
  * mode the reader's own UTC timestamps are used as-is (because the reader is
- * on NTP, or its clock was set from the Pi), but the offset is still tracked
+ * on NTP, or its clock was set from the local clock), but the offset is still tracked
  * so we can warn if the reader's clock is wrong.
  *
  * One instance per reader; every reader drifts differently.
@@ -44,7 +44,7 @@ public class ReaderClock {
     private static final Logger logger = LoggerFactory.getLogger(ReaderClock.class);
 
     public enum Mode {
-        // Correct every reader timestamp to the Pi's clock
+        // Correct every reader timestamp to the local clock
         DELTA,
         // Use the reader's UTC timestamps as-is, but warn if they are off
         READER
@@ -87,7 +87,7 @@ public class ReaderClock {
     }
 
     /**
-     * The Pi's current time in microseconds since the epoch.
+     * The local current time in microseconds since the epoch.
      */
     public static long nowMicros() {
         Instant now = Instant.now();
@@ -105,7 +105,7 @@ public class ReaderClock {
     }
 
     /**
-     * Record a reader timestamp along with the Pi time it was received at.
+     * Record a reader timestamp along with the local time it was received at.
      */
     public synchronized void sample(Kind kind, long readerMicros, long piReceiveMicros) {
         estimator(kind).add(piReceiveMicros - readerMicros, piReceiveMicros);
@@ -115,14 +115,14 @@ public class ReaderClock {
     }
 
     /**
-     * Convert a reader timestamp into Pi epoch microseconds.
+     * Convert a reader timestamp into local epoch microseconds.
      */
     public synchronized long toEpochMicros(Kind kind, long readerMicros, long piReceiveMicros) {
         if (kind == Kind.UTC && mode == Mode.READER) {
             return readerMicros;
         }
         if (kind == Kind.UPTIME && mode == Mode.READER && !warnedUptimeInReaderMode) {
-            logger.warn("Reader {} reports uptime-based timestamps, so its clock can't be used as-is. Using the Pi clock delta instead.", readerID);
+            logger.warn("Reader {} reports uptime-based timestamps, so its clock can't be used as-is. Using the local clock delta instead.", readerID);
             warnedUptimeInReaderMode = true;
         }
         Long offset = estimator(kind).estimate;
@@ -134,7 +134,7 @@ public class ReaderClock {
     }
 
     /**
-     * The current offset estimate (Pi - reader) in microseconds, or null if
+     * The current offset estimate (local - reader) in microseconds, or null if
      * nothing has been sampled yet. UTC takes precedence over Uptime.
      */
     public synchronized Long getOffsetMicros() {
@@ -143,10 +143,10 @@ public class ReaderClock {
 
     public synchronized String describe() {
         if (utc.estimate != null) {
-            return describeOffset(utc.estimate) + (mode == Mode.READER ? " (reader time is used as-is)" : " (tag times are corrected to Pi time)");
+            return describeOffset(utc.estimate) + (mode == Mode.READER ? " (reader time is used as-is)" : " (tag times are corrected to local time)");
         }
         if (uptime.estimate != null) {
-            return "reader uses uptime timestamps; offset to Pi clock is " + String.format("%.3f", uptime.estimate / 1_000_000.0) + " s";
+            return "reader uses uptime timestamps; offset to local clock is " + String.format("%.3f", uptime.estimate / 1_000_000.0) + " s";
         }
         return "no clock samples received from the reader yet";
     }
@@ -154,9 +154,9 @@ public class ReaderClock {
     private static String describeOffset(long offsetMicros) {
         double ms = Math.abs(offsetMicros) / 1000.0;
         if (offsetMicros >= 0) {
-            return String.format("reader clock is %.1f ms behind the Pi", ms);
+            return String.format("reader clock is %.1f ms behind the local clock", ms);
         }
-        return String.format("reader clock is %.1f ms ahead of the Pi", ms);
+        return String.format("reader clock is %.1f ms ahead of the local clock", ms);
     }
 
     private Estimator estimator(Kind kind) {
@@ -198,8 +198,8 @@ public class ReaderClock {
             boolean pruned = false;
 
             if (last != null && second < last[0]) {
-                // The Pi clock stepped backwards (NTP/GPS correction). Start over.
-                logger.info("Pi clock stepped backwards; resetting the clock offset window for reader {}", readerID);
+                // The local clock stepped backwards (NTP/GPS correction). Start over.
+                logger.info("Local clock stepped backwards; resetting the clock offset window for reader {}", readerID);
                 buckets.clear();
                 last = null;
                 pruned = true;
