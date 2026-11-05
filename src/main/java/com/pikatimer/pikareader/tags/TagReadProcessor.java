@@ -153,7 +153,7 @@ public class TagReadProcessor implements Runnable {
 
             }
         } catch (InterruptedException ex) {
-            logger.trace("Exiting " + tagProcessingThread.getName());
+            logger.info("Exiting " + tagProcessingThread.getName());
         }
     }
 
@@ -175,23 +175,23 @@ public class TagReadProcessor implements Runnable {
             }
         }
 
-        logger.debug("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);
+        logger.trace("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);
         tagQueue.add(tr);
 
         // Also ship all tag reads to the status handler for statistics
         statusHandler.postRead(tr);
         
-        // Beep if we have not seen the tag before or have not seen it in the last 5 seconds. 
-        // TODO:  Replace the AWT Toolkit beep with something better
-        if (seenTags.containsKey(tr.hexEPC)) {
-            if (Duration.between(seenTags.get(tr.hexEPC).timestamp, tr.timestamp).toSeconds() > 5) {
-                seenTags.put(tr.hexEPC, tr);
-                Toolkit.getDefaultToolkit().beep();
-            }
-        } else {
-            seenTags.put(tr.hexEPC, tr);
-            Toolkit.getDefaultToolkit().beep();
-        }
+//        // Beep if we have not seen the tag before or have not seen it in the last 5 seconds. 
+//        // TODO:  Replace the AWT Toolkit beep with something better
+//        if (seenTags.containsKey(tr.hexEPC)) {
+//            if (Duration.between(seenTags.get(tr.hexEPC).timestamp, tr.timestamp).toSeconds() > 5) {
+//                seenTags.put(tr.hexEPC, tr);
+//                Toolkit.getDefaultToolkit().beep();
+//            }
+//        } else {
+//            seenTags.put(tr.hexEPC, tr);
+//            Toolkit.getDefaultToolkit().beep();
+//        }
 
         logger.trace("Exiting TagDAO::processTagRead");
 
