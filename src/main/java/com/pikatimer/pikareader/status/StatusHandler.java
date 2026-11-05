@@ -218,7 +218,7 @@ public class StatusHandler {
             statusReport.put("timezone", pikaConfig.getTimezoneId().toString());
             lastStatus = statusReport;
             httpHandler.postStatus(statusReport);
-            logger.debug("Status Report: " + statusReport.toString(4));
+            logger.trace("Status Report: " + statusReport.toString(4));
             logger.trace("statusUpdate complete");
         };
 
