@@ -17,7 +17,10 @@
 package com.pikatimer.pikareader.http;
 
 import com.pikatimer.pikareader.conf.PikaConfig;
+import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderHandler;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.status.Status;
 import com.pikatimer.pikareader.status.StatusHandler;
 import com.pikatimer.pikareader.tags.TagDB;
@@ -35,6 +38,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import org.json.JSONArray;
@@ -224,6 +228,44 @@ public class HTTPHandler {
                 ctx.json(StatusHandler.getInstance().getStatus().toString(4));
             });
 
+            // Reader profiles: the ones available and the current one
+            javalinApp.get("/profiles", ctx -> {
+                ProfileManager profiles = ProfileManager.getInstance();
+                JSONObject response = new JSONObject();
+                response.put("current", profiles.getCurrent().id());
+                JSONArray list = new JSONArray();
+                profiles.getProfiles().forEach(p -> list.put(p.toJSON()));
+                response.put("profiles", list);
+                ctx.json(response.toString());
+            });
+
+            // The current profile and the settings each reader is using for it
+            javalinApp.get("/profile", ctx -> {
+                ctx.json(currentProfile().toString());
+            });
+
+            // Change the profile. Only allowed while the readers are not reading.
+            javalinApp.put("/profile/{profile}", ctx -> {
+                String name = ctx.pathParam("profile");
+                logger.info("HTTPD Request: PUT /profile/{}", name);
+                try {
+                    ReaderHandler.getInstance().setProfile(name);
+                    JSONObject response = currentProfile();
+                    response.put("timestamp", LocalDateTime.now(PikaConfig.getInstance().getTimezoneId()).format(formatter));
+                    ctx.json(response.toString());
+                } catch (IllegalArgumentException ex) {
+                    JSONObject response = new JSONObject();
+                    response.put("error", ex.getMessage());
+                    response.put("profiles", ProfileManager.getInstance().getProfiles().stream().map(ReaderProfile::id).toList());
+                    ctx.status(404).json(response.toString());
+                } catch (IllegalStateException ex) {
+                    JSONObject response = new JSONObject();
+                    response.put("error", ex.getMessage());
+                    response.put("current", ProfileManager.getInstance().getCurrent().id());
+                    ctx.status(409).json(response.toString());
+                }
+            });
+
             // TODO: Reader config page
             // TODO: Uploader config page
             // TODO: Status ws for folks who don't care about the reads
@@ -239,6 +281,23 @@ public class HTTPHandler {
 
         logger.trace("Exiting HTTPHandler constructor");
 
+    }
+
+    private JSONObject currentProfile() {
+        ReaderHandler readerHandler = ReaderHandler.getInstance();
+        JSONObject response = ProfileManager.getInstance().getCurrent().toJSON();
+        response.put("reading", readerHandler.isReading());
+        JSONArray readers = new JSONArray();
+        readerHandler.getReaders().stream().sorted(Comparator.comparing(RFIDReader::getID)).forEach(r -> {
+            JSONObject reader = new JSONObject();
+            reader.put("id", r.getID());
+            reader.put("type", r.getType());
+            reader.put("status", r.getStatus());
+            reader.put("settings", r.getProfileSettings());
+            readers.put(reader);
+        });
+        response.put("readers", readers);
+        return response;
     }
 
     public void stopHTTPD() {

@@ -21,13 +21,20 @@ import com.pikatimer.pikareader.readers.LlrpTls;
 import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderClock;
 import com.pikatimer.pikareader.readers.impinj.ImpinjPowerLevels;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
+import com.pikatimer.pikareader.readers.zebra.ZebraLinkMatcher.ZebraLink;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,11 +45,16 @@ import org.apache.mina.core.session.IoSession;
 import org.apache.mina.filter.FilterEvent;
 import org.apache.mina.filter.ssl.SslEvent;
 import org.apache.mina.filter.ssl.SslFilter;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.llrp.ltk.generated.enumerations.AISpecStopTriggerType;
 import org.llrp.ltk.generated.enumerations.AirProtocols;
+import org.llrp.ltk.generated.enumerations.C1G2StateAwareAction;
+import org.llrp.ltk.generated.enumerations.C1G2StateAwareTarget;
+import org.llrp.ltk.generated.enumerations.CommunicationsStandard;
 import org.llrp.ltk.generated.enumerations.C1G2TagInventoryStateAwareI;
 import org.llrp.ltk.generated.enumerations.C1G2TagInventoryStateAwareS;
+import org.llrp.ltk.generated.enumerations.C1G2TruncateAction;
 import org.llrp.ltk.generated.enumerations.GetReaderCapabilitiesRequestedData;
 import org.llrp.ltk.generated.enumerations.GetReaderConfigRequestedData;
 import org.llrp.ltk.generated.enumerations.KeepaliveTriggerType;
@@ -52,7 +64,10 @@ import org.llrp.ltk.generated.enumerations.ROSpecStartTriggerType;
 import org.llrp.ltk.generated.enumerations.ROSpecState;
 import org.llrp.ltk.generated.enumerations.ROSpecStopTriggerType;
 import org.llrp.ltk.generated.enumerations.StatusCode;
+import org.llrp.ltk.generated.enumerations.TagObservationTriggerType;
+import org.llrp.ltk.generated.interfaces.AirProtocolInventoryCommandSettings;
 import org.llrp.ltk.generated.interfaces.AirProtocolUHFRFModeTable;
+import org.llrp.ltk.generated.interfaces.SpecParameter;
 import org.llrp.ltk.generated.messages.ADD_ROSPEC;
 import org.llrp.ltk.generated.messages.ADD_ROSPEC_RESPONSE;
 import org.llrp.ltk.generated.messages.DELETE_ACCESSSPEC;
@@ -66,6 +81,8 @@ import org.llrp.ltk.generated.messages.GET_READER_CAPABILITIES;
 import org.llrp.ltk.generated.messages.GET_READER_CAPABILITIES_RESPONSE;
 import org.llrp.ltk.generated.messages.GET_READER_CONFIG;
 import org.llrp.ltk.generated.messages.GET_READER_CONFIG_RESPONSE;
+import org.llrp.ltk.generated.messages.GET_ROSPECS;
+import org.llrp.ltk.generated.messages.GET_ROSPECS_RESPONSE;
 import org.llrp.ltk.generated.messages.SET_READER_CONFIG;
 import org.llrp.ltk.generated.messages.SET_READER_CONFIG_RESPONSE;
 import org.llrp.ltk.generated.messages.START_ROSPEC;
@@ -77,12 +94,16 @@ import org.llrp.ltk.generated.parameters.AISpecStopTrigger;
 import org.llrp.ltk.generated.parameters.AntennaConfiguration;
 import org.llrp.ltk.generated.parameters.AntennaProperties;
 import org.llrp.ltk.generated.parameters.C1G2EPCMemorySelector;
+import org.llrp.ltk.generated.parameters.C1G2Filter;
 import org.llrp.ltk.generated.parameters.C1G2InventoryCommand;
 import org.llrp.ltk.generated.parameters.C1G2RFControl;
 import org.llrp.ltk.generated.parameters.C1G2SingulationControl;
+import org.llrp.ltk.generated.parameters.C1G2TagInventoryMask;
+import org.llrp.ltk.generated.parameters.C1G2TagInventoryStateAwareFilterAction;
 import org.llrp.ltk.generated.parameters.C1G2TagInventoryStateAwareSingulationAction;
 import org.llrp.ltk.generated.parameters.C1G2UHFRFModeTable;
 import org.llrp.ltk.generated.parameters.C1G2UHFRFModeTableEntry;
+import org.llrp.ltk.generated.parameters.Custom;
 import org.llrp.ltk.generated.parameters.EventNotificationState;
 import org.llrp.ltk.generated.parameters.EventsAndReports;
 import org.llrp.ltk.generated.parameters.FrequencyInformation;
@@ -102,6 +123,7 @@ import org.llrp.ltk.generated.parameters.ROSpecStopTrigger;
 import org.llrp.ltk.generated.parameters.ReaderEventNotificationSpec;
 import org.llrp.ltk.generated.parameters.ReceiveSensitivityTableEntry;
 import org.llrp.ltk.generated.parameters.RegulatoryCapabilities;
+import org.llrp.ltk.generated.parameters.TagObservationTrigger;
 import org.llrp.ltk.generated.parameters.TagReportContentSelector;
 import org.llrp.ltk.generated.parameters.TransmitPowerLevelTableEntry;
 import org.llrp.ltk.generated.parameters.UHFBandCapabilities;
@@ -109,6 +131,7 @@ import org.llrp.ltk.net.LLRPConnectionAttemptFailedException;
 import org.llrp.ltk.net.LLRPConnector;
 import org.llrp.ltk.net.LLRPIoHandlerAdapterImpl;
 import org.llrp.ltk.types.Bit;
+import org.llrp.ltk.types.BitArray_HEX;
 import org.llrp.ltk.types.LLRPMessage;
 import org.llrp.ltk.types.TwoBitField;
 import org.llrp.ltk.types.UnsignedByte;
@@ -149,9 +172,19 @@ public class Zebra implements RFIDReader {
     private static final int MAX_QUICK_ROSPEC_ENDS = 10;
 
     /**
+     * The settings a reader's "Profiles" entry may override.
+     */
+    static final Set<String> OVERRIDE_KEYS = Set.of("Reader Mode", "Search Mode", "Session", "Tag Population",
+            "Power Level", "Dwell", "Inventory Cycles");
+
+    /**
      * How the inventory rounds target the tags' session flags.
      */
     enum SearchMode {
+        // Zebra's own A/B flip (the MotoAntennaQueryConfig custom parameter):
+        // one state-unaware AISpec where the reader alternates the target
+        // itself. The profile default.
+        AB_FLIP("ABFlip"),
         // Alternate AISpecs targeting A then B. Tags flipped by neighbouring
         // readers are still seen, and every tag is re-read on each flip.
         DUAL_TARGET("DualTarget"),
@@ -171,20 +204,82 @@ public class Zebra implements RFIDReader {
             return label;
         }
 
-        static SearchMode fromConfig(String s, Integer readerID) {
+        static SearchMode fromConfig(String s, Integer readerID, SearchMode fallback) {
             if (s == null || s.isBlank()) {
-                return DUAL_TARGET;
+                return fallback;
             }
-            String n = s.trim().replace(" ", "").replace("_", "");
+            String n = s.trim().replace(" ", "").replace("_", "").replace("-", "");
             for (SearchMode m : values()) {
                 if (m.label.equalsIgnoreCase(n) || m.name().replace("_", "").equalsIgnoreCase(n)) {
                     return m;
                 }
             }
-            logger.warn("Unknown Search Mode '{}' for reader {}. Using {}.", s, readerID, DUAL_TARGET);
-            return DUAL_TARGET;
+            logger.warn("Unknown Search Mode '{}' for reader {}. Using {}.", s, readerID, fallback);
+            return fallback;
         }
     }
+
+    /**
+     * How the reader moves on to the next antenna in AB_FLIP mode.
+     */
+    enum StopMode {
+        // MotoAntennaStopCondition: the role's inventory rounds per antenna
+        ZEBRA,
+        // Standard LLRP: one AISpec per antenna, each ending after the role's
+        // inventory rounds (Tag_Observation trigger). The ROSpec is
+        // restarted each time it ends, like DualTarget.
+        PER_ANTENNA,
+        // One AISpec for every antenna; the reader decides when to switch
+        NONE
+    }
+
+    /**
+     * How AB_FLIP is done on a reader: with Zebra's custom parameters where
+     * the reader takes them, otherwise with the standard-LLRP fallbacks in
+     * reader-profiles.json (readers.zebra_fx.extension_fallbacks).
+     *
+     * @param zebraQuery MotoAntennaQueryConfig (A/B flip, SL All). False
+     * means the Select reset fallback: a C1G2Filter with a zero-length mask
+     * sets every tag to A before the round, and the round reads A tags,
+     * flipping them to B (like Impinj's B to A Select).
+     * @param stop how the reader moves between antennas
+     */
+    record AbFlipPlan(boolean zebraQuery, StopMode stop) {
+
+        boolean usesZebraParams() {
+            return zebraQuery || stop == StopMode.ZEBRA;
+        }
+
+        @Override
+        public String toString() {
+            return (zebraQuery ? "Zebra A/B flip" : "Select reset A/B flip") + ", " + switch (stop) {
+                case ZEBRA ->
+                    "Zebra antenna stop";
+                case PER_ANTENNA ->
+                    "one AISpec per antenna";
+                case NONE ->
+                    "reader antenna switching";
+            };
+        }
+    }
+
+    /**
+     * A ROSpec style to try: a search mode, plus the plan for AB_FLIP.
+     */
+    record Attempt(SearchMode mode, AbFlipPlan plan) {
+
+        @Override
+        public String toString() {
+            return plan == null ? mode.toString() : mode + " (" + plan + ")";
+        }
+    }
+
+    /**
+     * The ROSpec style each reader (serial number and firmware) accepted, so
+     * later connections skip the attempts it rejected. Kept while PikaReader
+     * runs.
+     */
+    private static final Map<String, Attempt> ACCEPTED = new ConcurrentHashMap<>();
 
     static class ZebraException extends Exception {
 
@@ -204,10 +299,24 @@ public class Zebra implements RFIDReader {
     private int readerPort = DEFAULT_PORT;
     private boolean useTls = false;
     private JSONObject readerConfig = new JSONObject();
-    private SearchMode searchMode = SearchMode.DUAL_TARGET;
-    private int session = 1;
-    private int tagPopulation = 128;
+
+    // Inventory settings for the current profile (see resolveProfile())
+    private SearchMode searchMode = SearchMode.AB_FLIP;
+    private int session = 2;
+    private int tagPopulation = 32;
     private int dwellMs = 500;
+    private int inventoryCycles = 1;
+    private volatile ReaderProfile appliedProfile = null;
+    private volatile ZebraLink activeLink = null;
+    private volatile List<ZebraLink> fallbackLinks = List.of();
+    private volatile Map<String, String> profileSources = Map.of();
+    private volatile AbFlipPlan activePlan = null;
+    // Optional "Model" (a key in readers.zebra_fx.model_support, e.g.
+    // "fx9500"). LLRP only reports a model number.
+    private String model = null;
+    private String firmware = "";
+    private String serial = null;
+    private volatile List<String> modelWarnings = List.of();
     private ReaderClock clock = new ReaderClock(-1, ReaderClock.Mode.DELTA, null);
     private final Set<Integer> disabledAntennas = ConcurrentHashMap.newKeySet();
 
@@ -217,12 +326,16 @@ public class Zebra implements RFIDReader {
     private Integer powerIndex = null;
     private Integer rxSensitivityIndex = null;
     private Integer modeIdentifier = null;
+    private int tariNs = 0; // 0 = let the reader pick within the mode's range
+    private List<C1G2UHFRFModeTableEntry> rfModeTable = List.of();
+    private List<TransmitPowerLevelTableEntry> txPowerTable = List.of();
+    private Integer communicationsStandard = null;
     private Map<Integer, int[]> hopChannel = new HashMap<>();
     private int[] defaultHopChannel = {1, 1};
     private boolean rospecEventsSupported = true;
     private boolean stateAwareSupported = true;
     private long maxSpecsPerROSpec = 0;
-    private volatile SearchMode activeSearchMode = SearchMode.DUAL_TARGET;
+    private volatile SearchMode activeSearchMode = SearchMode.AB_FLIP;
 
     // Live state
     private final Map<Integer, String> antennaStatus = new ConcurrentHashMap<>();
@@ -267,11 +380,9 @@ public class Zebra implements RFIDReader {
             // Before the monitor thread below makes the first TLS connection
             LlrpTls.allowLegacyCertificates();
         }
-        z.searchMode = SearchMode.fromConfig(config.optString("Search Mode", ""), z.readerID);
-        z.activeSearchMode = z.searchMode;
-        z.session = clamp(z.readerID, "Session", config.optInt("Session", 1), 0, 3);
-        z.tagPopulation = clamp(z.readerID, "Tag Population", config.optInt("Tag Population", 128), 1, 65535);
-        z.dwellMs = clamp(z.readerID, "Dwell", config.optInt("Dwell", 500), 50, 60000);
+        // Inventory settings come from the selected profile (see resolveProfile())
+        ProfileManager.getInstance().checkReaderConfig(config, z.readerID, OVERRIDE_KEYS);
+        z.model = modelFromConfig(config.optString("Model", ""), z.readerID);
         z.clock = new ReaderClock(z.readerID, clockModeFromConfig(config.optString("Clock", ""), z.readerID),
                 "Is NTP configured and working on the reader? Set \"Clock\": \"Delta\" to use the local clock instead.");
 
@@ -293,6 +404,31 @@ public class Zebra implements RFIDReader {
         z.monitor = new ZebraConnectionMonitor(z);
         Thread.ofVirtual().name("Zebra-" + z.readerID + "-Monitor").start(z.monitor);
         return z;
+    }
+
+    /**
+     * "Model": FX7400, FX7500, FX9500, FX9600 or FXR90. Optional; it lets
+     * PikaReader skip the Zebra extensions on models that don't have them.
+     *
+     * @return the model_support key, or null
+     */
+    static String modelFromConfig(String s, Integer readerID) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        String key = s.trim().toLowerCase(Locale.ROOT).replace(" ", "").replace("-", "").replace("_", "");
+        JSONObject support = ProfileManager.getInstance().getReaderData("zebra_fx").optJSONObject("model_support", new JSONObject());
+        if (support.has(key)) {
+            return key;
+        }
+        logger.warn("Reader {}: unknown \"Model\" '{}'. Models: {}. Ignoring it.", readerID, s,
+                support.keySet().stream().sorted().map(k -> k.toUpperCase(Locale.ROOT)).toList());
+        return null;
+    }
+
+    private JSONObject modelSupport() {
+        JSONObject support = ProfileManager.getInstance().getReaderData("zebra_fx").optJSONObject("model_support", new JSONObject());
+        return model == null ? new JSONObject() : support.optJSONObject(model, new JSONObject());
     }
 
     /**
@@ -421,6 +557,7 @@ public class Zebra implements RFIDReader {
 
             readCapabilities();
             configureReader();
+            resolveProfile();
 
             // Clear out anything left over from a previous session or another client
             DELETE_ACCESSSPEC deleteAccess = new DELETE_ACCESSSPEC();
@@ -472,6 +609,7 @@ public class Zebra implements RFIDReader {
         GET_READER_CAPABILITIES_RESPONSE caps = transact(request, GET_READER_CAPABILITIES_RESPONSE.class);
 
         maxAntennas = 0;
+        firmware = "";
         boolean hasUTCClock = false;
         List<ReceiveSensitivityTableEntry> rxTable = List.of();
 
@@ -482,10 +620,12 @@ public class Zebra implements RFIDReader {
             if (general.getReceiveSensitivityTableEntryList() != null) {
                 rxTable = general.getReceiveSensitivityTableEntryList();
             }
-            logger.info("Zebra reader {}: manufacturer {} model {} firmware {}, {} antenna ports, UTC clock: {}",
+            firmware = general.getReaderFirmwareVersion() == null ? "" : general.getReaderFirmwareVersion().toString();
+            logger.info("Zebra reader {}: manufacturer {} model number {} firmware {}, {} antenna ports, UTC clock: {}",
                     readerID, general.getDeviceManufacturerName(), general.getModelName(),
-                    general.getReaderFirmwareVersion(), maxAntennas, hasUTCClock);
+                    firmware, maxAntennas, hasUTCClock);
         }
+        checkModel();
 
         if (!hasUTCClock && clock.getMode() == ReaderClock.Mode.READER) {
             logger.warn("Reader {} does not report a UTC clock, so NTP clock mode may not work. Consider \"Clock\": \"Delta\".", readerID);
@@ -508,10 +648,14 @@ public class Zebra implements RFIDReader {
         List<C1G2UHFRFModeTableEntry> modeTable = new ArrayList<>();
         FrequencyInformation frequencyInformation = null;
 
+        communicationsStandard = null;
         RegulatoryCapabilities regulatory = caps.getRegulatoryCapabilities();
         if (regulatory != null) {
             logger.info("Zebra reader {}: country code {}, communications standard {}",
                     readerID, regulatory.getCountryCode(), regulatory.getCommunicationsStandard());
+            if (regulatory.getCommunicationsStandard() != null) {
+                communicationsStandard = regulatory.getCommunicationsStandard().intValue();
+            }
             UHFBandCapabilities uhf = regulatory.getUHFBandCapabilities();
             if (uhf != null) {
                 if (uhf.getTransmitPowerLevelTableEntryList() != null) {
@@ -529,11 +673,11 @@ public class Zebra implements RFIDReader {
         }
 
         modeTable.forEach(m -> logger.info("Zebra reader {} RF {}", readerID, ZebraReaderMode.describe(m)));
-        C1G2UHFRFModeTableEntry mode = ZebraReaderMode.select(readerConfig.optString("Reader Mode", ""), modeTable, readerID);
-        modeIdentifier = mode == null ? null : mode.getModeIdentifier().intValue();
-
-        powerIndex = selectPowerIndex(powerTable);
+        // The profile picks the mode and power from these (see resolveProfile())
+        rfModeTable = List.copyOf(modeTable);
+        txPowerTable = List.copyOf(powerTable);
         rxSensitivityIndex = selectRxSensitivityIndex(rxTable);
+        logRegion(frequencyInformation);
 
         // Regional channel defaults in case the reader doesn't tell us its current ones
         defaultHopChannel = new int[]{1, 1};
@@ -543,13 +687,12 @@ public class Zebra implements RFIDReader {
         }
     }
 
-    private Integer selectPowerIndex(List<TransmitPowerLevelTableEntry> table) {
+    private Integer selectPowerIndex(List<TransmitPowerLevelTableEntry> table, String configured) {
         if (table.isEmpty()) {
             logger.warn("Reader {} did not advertise a transmit power table. Leaving power at the reader's default.", readerID);
             return null;
         }
 
-        String configured = readerConfig.optString("Power Level", "");
         double target = targetDBm(configured);
 
         List<TransmitPowerLevelTableEntry> sorted = new ArrayList<>(table);
@@ -609,6 +752,257 @@ public class Zebra implements RFIDReader {
                 .orElse(null);
     }
 
+    /**
+     * Work out this reader's inventory settings for the current profile from
+     * the profile data (readers.zebra_fx in reader-profiles.json), the
+     * reader's "Profiles" overrides and what the reader reported in
+     * GET_READER_CAPABILITIES. Called on every connect and profile change.
+     */
+    private void resolveProfile() {
+        ProfileManager profiles = ProfileManager.getInstance();
+        ReaderProfile profile = profiles.getCurrent();
+        JSONObject overrides = profiles.overridesFor(readerConfig, profile);
+        JSONObject data = profiles.getReaderData("zebra_fx");
+        JSONObject role = data.getJSONObject("roles").optJSONObject(profile.id());
+        JSONObject linkClasses = data.getJSONObject("link_classes");
+        Long automac = automacIndex(profiles.getZebraCustom());
+        Map<String, String> sources = new LinkedHashMap<>();
+
+        // The air link. A profile names a link class, which is matched
+        // against the reader's own mode table. A "Reader Mode" override can
+        // name a link class, a ZebraReaderMode name or a raw mode number.
+        ZebraLink link = null;
+        C1G2UHFRFModeTableEntry entry = null;
+        String modeOverride = overrides.optString("Reader Mode", "");
+        String primaryClass = role == null ? null : role.optString("link_class", null);
+        if (!modeOverride.isBlank()) {
+            sources.put("Reader Mode", "override");
+            Optional<String> cls = ZebraLinkMatcher.findClass(linkClasses, modeOverride);
+            if (cls.isPresent()) {
+                link = ZebraLinkMatcher.resolve(cls.get(), linkClasses, rfModeTable, automac).orElse(null);
+                if (link == null && !rfModeTable.isEmpty()) {
+                    logger.error("Reader {}: its RF mode table has no link in the {} class. Using {} instead.", readerID, cls.get(), ZebraReaderMode.DEFAULT);
+                }
+            } else {
+                entry = ZebraReaderMode.select(modeOverride, rfModeTable, readerID);
+            }
+        } else if (primaryClass != null) {
+            sources.put("Reader Mode", "profile");
+            link = ZebraLinkMatcher.resolve(primaryClass, linkClasses, rfModeTable, automac).orElse(null);
+            if (link == null && !rfModeTable.isEmpty()) {
+                logger.error("Reader {}: its RF mode table has no link in the {} class for the {} profile. Using {} instead.",
+                        readerID, primaryClass, profile.name(), ZebraReaderMode.DEFAULT);
+            }
+        }
+        if (link == null && entry == null) {
+            // Reading with a reasonable link beats not reading
+            entry = ZebraReaderMode.select("", rfModeTable, readerID);
+        }
+        if (link != null) {
+            modeIdentifier = (int) link.modeId();
+            tariNs = link.tariNs();
+        } else {
+            modeIdentifier = entry == null ? null : entry.getModeIdentifier().intValue();
+            tariNs = 0;
+        }
+        activeLink = link;
+
+        List<ZebraLink> fallbacks = List.of();
+        if (role != null) {
+            List<String> classes = role.optJSONArray("fallback_link_classes", new JSONArray()).toList().stream().map(Object::toString).toList();
+            fallbacks = ZebraLinkMatcher.resolveFallbacks(classes, linkClasses, rfModeTable, automac, link);
+        }
+        fallbackLinks = List.copyOf(fallbacks);
+        if (link != null && link.nearest()) {
+            logNearest(link);
+        }
+        fallbacks.stream().filter(ZebraLink::nearest).forEach(this::logNearest);
+
+        String searchOverride = overrides.optString("Search Mode", "");
+        if (!searchOverride.isBlank()) {
+            searchMode = SearchMode.fromConfig(searchOverride, readerID, SearchMode.AB_FLIP);
+            sources.put("Search Mode", "override");
+        } else {
+            searchMode = SearchMode.fromConfig(data.optString("search_mode", ""), readerID, SearchMode.AB_FLIP);
+            sources.put("Search Mode", "profile");
+        }
+
+        if (overrides.has("Session")) {
+            session = clamp(readerID, "Session", overrides.optInt("Session", 2), 0, 3);
+            sources.put("Session", "override");
+        } else {
+            session = profiles.sessionFor(readerID);
+            sources.put("Session", "assigned");
+        }
+
+        if (overrides.has("Tag Population")) {
+            tagPopulation = clamp(readerID, "Tag Population", overrides.optInt("Tag Population", profile.tagPopulation()), 1, 65535);
+            sources.put("Tag Population", "override");
+        } else {
+            tagPopulation = profile.tagPopulation();
+            sources.put("Tag Population", "profile");
+        }
+
+        if (overrides.has("Dwell")) {
+            dwellMs = clamp(readerID, "Dwell", overrides.optInt("Dwell", 500), 50, 60000);
+            sources.put("Dwell", "override");
+        } else {
+            dwellMs = clamp(readerID, "Dwell", readerConfig.optInt("Dwell", 500), 50, 60000);
+            sources.put("Dwell", "reader");
+        }
+
+        if (overrides.has("Inventory Cycles")) {
+            inventoryCycles = clamp(readerID, "Inventory Cycles", overrides.optInt("Inventory Cycles", 1), 1, 65535);
+            sources.put("Inventory Cycles", "override");
+        } else {
+            inventoryCycles = role == null ? 1 : Math.max(1, role.optInt("antenna_stop_inventory_cycles", 1));
+            sources.put("Inventory Cycles", "profile");
+        }
+
+        String power;
+        if (overrides.has("Power Level")) {
+            power = overrides.optString("Power Level", "");
+            sources.put("Power Level", "override");
+        } else {
+            power = readerConfig.optString("Power Level", "");
+            sources.put("Power Level", "reader");
+        }
+        powerIndex = selectPowerIndex(txPowerTable, power);
+
+        activeSearchMode = supportedSearchMode(searchMode);
+        profileSources = Map.copyOf(sources);
+        appliedProfile = profile;
+
+        logger.info("Reader {} {} profile: link {}, search mode {}, session {}, tag population {} (settings from: {})",
+                readerID, profile.name(), describeLink(), activeSearchMode, session, tagPopulation, sources);
+        if (!fallbacks.isEmpty()) {
+            logger.info("Reader {} {} profile fallback links (use one with a \"Reader Mode\" override naming its class): {}",
+                    readerID, profile.name(), fallbacks);
+        }
+    }
+
+    private void logNearest(ZebraLink link) {
+        logger.info("Reader {}: its RF mode table has no exact {} link. The nearest rule picked {}: {}",
+                readerID, link.linkClass(), link, ZebraReaderMode.describe(link.entry()));
+    }
+
+    /**
+     * Zebra's "automac" mode table entry has variable link parameters and
+     * must never be used. Its index depends on the reader's region.
+     */
+    private Long automacIndex(JSONObject zebraCustom) {
+        JSONObject never = zebraCustom.optJSONObject("automac_index_never_use");
+        Integer cs = communicationsStandard;
+        if (never == null || cs == null) {
+            return null;
+        }
+        String key = switch (cs) {
+            case CommunicationsStandard.US_FCC_Part_15 ->
+                "fcc";
+            case CommunicationsStandard.ETSI_302_208, CommunicationsStandard.ETSI_300_220 ->
+                "etsi";
+            default ->
+                null;
+        };
+        return key == null || !never.has(key) ? null : never.getLong(key);
+    }
+
+    /**
+     * Log the reader's region family. Zebra links are matched against the
+     * reader's own mode table, so the region does not change the settings.
+     */
+    private void logRegion(FrequencyInformation frequencyInformation) {
+        List<Double> freqs = new ArrayList<>();
+        if (frequencyInformation != null) {
+            if (frequencyInformation.getFrequencyHopTableList() != null) {
+                frequencyInformation.getFrequencyHopTableList().forEach(t -> {
+                    if (t.getFrequency() != null) {
+                        for (int i = 0; i < t.getFrequency().size(); i++) {
+                            freqs.add(t.getFrequency().get(i).toLong() / 1000.0);
+                        }
+                    }
+                });
+            }
+            if (frequencyInformation.getFixedFrequencyTable() != null && frequencyInformation.getFixedFrequencyTable().getFrequency() != null) {
+                var fixed = frequencyInformation.getFixedFrequencyTable().getFrequency();
+                for (int i = 0; i < fixed.size(); i++) {
+                    freqs.add(fixed.get(i).toLong() / 1000.0);
+                }
+            }
+        }
+        String family = ProfileManager.regionFamily(communicationsStandard, freqs);
+        logger.info("Zebra reader {}: region family {}", readerID, family == null ? "unknown" : family);
+        String configured = ProfileManager.getInstance().getConfiguredRegion();
+        if (configured != null && family != null && !configured.equals(family)) {
+            logger.warn("Reader {}: the config sets \"Region\": \"{}\", but the reader reports {}. Zebra links come from the reader's own mode table, so its settings are not affected.",
+                    readerID, configured, family);
+        }
+    }
+
+    @Override
+    public void applyProfile() {
+        String name = ProfileManager.getInstance().getCurrent().name();
+        startStopLock.lock();
+        try {
+            if (wantReading || reading) {
+                logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
+                return;
+            }
+            // A connect in progress holds the command lock, so this waits
+            // for it. It may have set up the previous profile.
+            commandLock.lock();
+            try {
+                if (!connected) {
+                    logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
+                    return;
+                }
+                resolveProfile();
+                DELETE_ROSPEC delete = new DELETE_ROSPEC();
+                delete.setROSpecID(new UnsignedInteger(ROSPEC_ID));
+                transactIgnoringRejection(delete, DELETE_ROSPEC_RESPONSE.class);
+                addROSpec();
+            } finally {
+                commandLock.unlock();
+            }
+        } catch (ZebraException ex) {
+            // Without a ROSpec the reader can't read, so start over: the
+            // monitor reconnects and sets everything up for the current profile
+            logger.error("Reader {}: unable to apply the {} profile: {}", readerID, name, ex.getMessage());
+            connectionLost("unable to apply the reader profile");
+        } finally {
+            startStopLock.unlock();
+        }
+    }
+
+    @Override
+    public JSONObject getProfileSettings() {
+        ReaderProfile current = ProfileManager.getInstance().getCurrent();
+        JSONObject o = new JSONObject();
+        o.put("profile", current.id());
+        if (!connected || !current.equals(appliedProfile)) {
+            o.put("applied", false);
+            o.put("note", "The profile is applied when the reader connects");
+            return o;
+        }
+        o.put("applied", true);
+        o.put("readerMode", describeLink());
+        ZebraLink link = activeLink;
+        o.put("linkClass", link == null ? JSONObject.NULL : link.linkClass());
+        o.put("fallbackLinks", fallbackLinks.stream().map(ZebraLink::toString).toList());
+        o.put("searchMode", activeSearchMode.toString());
+        AbFlipPlan plan = activePlan;
+        o.put("abFlip", activeSearchMode == SearchMode.AB_FLIP && plan != null ? plan.toString() : JSONObject.NULL);
+        o.put("model", model == null ? JSONObject.NULL : model.toUpperCase(Locale.ROOT));
+        o.put("warnings", modelWarnings);
+        o.put("session", session);
+        o.put("tagPopulation", tagPopulation);
+        o.put("inventoryCycles", inventoryCycles);
+        o.put("dwell", dwellMs);
+        o.put("powerIndex", powerIndex == null ? JSONObject.NULL : powerIndex);
+        o.put("sources", new JSONObject(profileSources));
+        return o;
+    }
+
     private void configureReader() throws ZebraException {
         // Keepalives let us notice a dead link, since the LTK has no "closed" callback
         SET_READER_CONFIG keepalive = newReaderConfig();
@@ -643,19 +1037,27 @@ public class Zebra implements RFIDReader {
             }
         }
 
-        activeSearchMode = searchMode;
-        if (activeSearchMode != SearchMode.READER_DEFAULT && !stateAwareSupported) {
-            logger.error("Reader {} does not support state-aware singulation, which {} needs. Falling back to ReaderDefault.", readerID, activeSearchMode);
-            activeSearchMode = SearchMode.READER_DEFAULT;
+    }
+
+    /**
+     * @return the search mode to use in place of the wanted one, given what
+     * the reader said it can do
+     */
+    private SearchMode supportedSearchMode(SearchMode wanted) {
+        SearchMode mode = wanted;
+        if ((mode == SearchMode.DUAL_TARGET || mode == SearchMode.SINGLE_TARGET) && !stateAwareSupported) {
+            logger.error("Reader {} does not support state-aware singulation, which {} needs. Falling back to ReaderDefault.", readerID, mode);
+            mode = SearchMode.READER_DEFAULT;
         }
-        if (activeSearchMode == SearchMode.DUAL_TARGET && maxSpecsPerROSpec == 1) {
+        if (mode == SearchMode.DUAL_TARGET && maxSpecsPerROSpec == 1) {
             logger.error("Reader {} only allows one spec per ROSpec, and DualTarget needs two. Falling back to SingleTarget.", readerID);
-            activeSearchMode = SearchMode.SINGLE_TARGET;
+            mode = SearchMode.SINGLE_TARGET;
         }
-        if (activeSearchMode == SearchMode.DUAL_TARGET && !rospecEventsSupported) {
+        if (mode == SearchMode.DUAL_TARGET && !rospecEventsSupported) {
             logger.error("Reader {} does not report ROSpec events, which DualTarget needs. Falling back to SingleTarget.", readerID);
-            activeSearchMode = SearchMode.SINGLE_TARGET;
+            mode = SearchMode.SINGLE_TARGET;
         }
+        return mode;
     }
 
     private static SET_READER_CONFIG newReaderConfig() {
@@ -709,8 +1111,10 @@ public class Zebra implements RFIDReader {
         request.setGPOPortNum(new UnsignedShort(0));
         GET_READER_CONFIG_RESPONSE config = transact(request, GET_READER_CONFIG_RESPONSE.class);
 
-        if (config.getIdentification() != null) {
-            logger.info("Zebra reader {} LLRP reader ID: {}", readerID, config.getIdentification().getReaderID());
+        serial = null;
+        if (config.getIdentification() != null && config.getIdentification().getReaderID() != null) {
+            serial = config.getIdentification().getReaderID().toString();
+            logger.info("Zebra reader {} LLRP reader ID: {}", readerID, serial);
         }
 
         // Keep the reader's current regional hop table / channel per antenna.
@@ -765,29 +1169,36 @@ public class Zebra implements RFIDReader {
     }
 
     private void addROSpec() throws ZebraException {
-        List<SearchMode> attempts = activeSearchMode == SearchMode.READER_DEFAULT
-                ? List.of(SearchMode.READER_DEFAULT)
-                : List.of(activeSearchMode, SearchMode.READER_DEFAULT);
+        List<Attempt> attempts = attempts();
 
         ZebraException lastError = null;
-        for (SearchMode mode : attempts) {
+        Attempt accepted = null;
+        for (Attempt attempt : attempts) {
+            // buildROSpec() and the ROSpec restart logic read these
+            activeSearchMode = attempt.mode();
+            activePlan = attempt.plan();
             ADD_ROSPEC add = new ADD_ROSPEC();
-            add.setROSpec(buildROSpec(mode));
+            add.setROSpec(buildROSpec(attempt.mode()));
             try {
                 transact(add, ADD_ROSPEC_RESPONSE.class);
-                activeSearchMode = mode;
-                lastError = null;
+                accepted = attempt;
                 break;
             } catch (ZebraException ex) {
                 if (!ex.rejected) {
                     throw ex;
                 }
                 lastError = ex;
-                logger.error("Reader {} rejected the {} ROSpec: {}", readerID, mode, ex.getMessage());
+                logger.warn("Reader {} rejected the {} ROSpec: {}", readerID, attempt, ex.getMessage());
             }
         }
-        if (lastError != null) {
+        if (accepted == null) {
             throw lastError;
+        }
+        if (!accepted.equals(attempts.getFirst())) {
+            logger.warn("Reader {} is using {} instead of {}", readerID, accepted, attempts.getFirst());
+        }
+        if (attempts.getFirst().mode() == SearchMode.AB_FLIP) {
+            ACCEPTED.put(cacheKey(), accepted);
         }
 
         ENABLE_ROSPEC enable = new ENABLE_ROSPEC();
@@ -795,12 +1206,216 @@ public class Zebra implements RFIDReader {
         transact(enable, ENABLE_ROSPEC_RESPONSE.class);
 
         logger.info("Reader {} inventory: {}{}, session {}, tag population {}, RF mode {}, power index {}, antennas {}",
-                readerID, activeSearchMode,
-                activeSearchMode == SearchMode.DUAL_TARGET ? " (" + dwellMs + " ms per target)" : "",
-                session, tagPopulation,
-                modeIdentifier == null ? "reader default" : modeIdentifier,
+                readerID, activeSearchMode, searchModeDetail(),
+                session, tagPopulation, describeLink(),
                 powerIndex == null ? "reader default" : powerIndex,
                 enabledAntennas);
+
+        verifyROSpec();
+    }
+
+    private String searchModeDetail() {
+        AbFlipPlan plan = activePlan;
+        return switch (activeSearchMode) {
+            case DUAL_TARGET ->
+                " (" + dwellMs + " ms per target)";
+            case AB_FLIP ->
+                plan == null || plan.stop() == StopMode.NONE ? " (" + plan + ")"
+                : " (" + plan + ", " + inventoryCycles + " inventory round" + (inventoryCycles == 1 ? "" : "s") + " per antenna)";
+            default ->
+                "";
+        };
+    }
+
+    /**
+     * The ROSpec styles to try, best first. For AB_FLIP: Zebra's custom
+     * parameters, then each standard-LLRP fallback, then DualTarget. A style
+     * this reader accepted before (same serial number and firmware) goes
+     * first, and the styles it rejected are skipped.
+     */
+    private List<Attempt> attempts() {
+        List<Attempt> list = new ArrayList<>();
+        if (activeSearchMode == SearchMode.AB_FLIP) {
+            Attempt known = ACCEPTED.get(cacheKey());
+            if (known != null && (known.plan() == null || abFlipPlans().contains(known.plan()))) {
+                logger.info("Reader {} accepted {} on an earlier connection. Using it again.", readerID, known);
+                list.add(known);
+            } else {
+                abFlipPlans().forEach(plan -> list.add(new Attempt(SearchMode.AB_FLIP, plan)));
+            }
+            // A reader that takes none of them can still alternate the
+            // targets the standard LLRP way
+            Attempt standard = new Attempt(supportedSearchMode(SearchMode.DUAL_TARGET), null);
+            if (!list.contains(standard)) {
+                list.add(standard);
+            }
+        } else {
+            list.add(new Attempt(activeSearchMode, null));
+        }
+        Attempt last = new Attempt(SearchMode.READER_DEFAULT, null);
+        if (!list.contains(last)) {
+            list.add(last);
+        }
+        return list;
+    }
+
+    /**
+     * The A/B flip plans this reader could take, best first. Models known
+     * not to have Zebra's antenna extensions (model_support
+     * antenna_extensions = unsupported) only get the standard-LLRP ones.
+     */
+    private List<AbFlipPlan> abFlipPlans() {
+        boolean zebraOk = !"unsupported".equals(modelSupport().optString("antenna_extensions", "unknown"));
+        // One AISpec per antenna needs ROSpec events (to restart the ROSpec)
+        // and more than one antenna to switch between
+        StopMode standardStop = rospecEventsSupported && enabledAntennas.size() > 1 ? StopMode.PER_ANTENNA : StopMode.NONE;
+        List<AbFlipPlan> plans = new ArrayList<>();
+        if (zebraOk) {
+            plans.add(new AbFlipPlan(true, StopMode.ZEBRA));
+            plans.add(new AbFlipPlan(true, standardStop));
+            if (stateAwareSupported) {
+                plans.add(new AbFlipPlan(false, StopMode.ZEBRA));
+            }
+        }
+        if (stateAwareSupported) {
+            plans.add(new AbFlipPlan(false, standardStop));
+        }
+        return plans;
+    }
+
+    private String cacheKey() {
+        return (serial == null ? readerIP : serial) + "|" + firmware;
+    }
+
+    /**
+     * Log what reader-profiles.json knows about the configured model, and
+     * check its minimum firmware.
+     */
+    private void checkModel() {
+        List<String> warnings = new ArrayList<>();
+        JSONObject support = modelSupport();
+        if (model != null) {
+            String name = model.toUpperCase(Locale.ROOT);
+            logger.info("Zebra reader {} is configured as an {} ({}). Zebra antenna extensions: {}", readerID, name,
+                    support.optString("status", "unknown status"), support.optString("antenna_extensions", "unknown"));
+            support.optJSONArray("notes", new JSONArray()).forEach(n -> logger.info("Reader {} ({}): {}", readerID, name, n));
+            String minFirmware = support.optString("min_firmware", "");
+            if (!minFirmware.isBlank() && !firmware.isBlank() && compareVersions(firmware, minFirmware) < 0) {
+                String w = "Reader " + readerID + " (" + name + ") has firmware " + firmware + ". PikaReader needs " + minFirmware
+                        + " or later on this model for its A/B flip fallback. Update the reader's firmware.";
+                logger.error(w);
+                warnings.add(w);
+            }
+        }
+        modelWarnings = List.copyOf(warnings);
+    }
+
+    /**
+     * Compare the numbers in two version strings ("1.5.4" < "1.5.5" <
+     * "1.5.10").
+     */
+    static int compareVersions(String a, String b) {
+        long[] x = java.util.regex.Pattern.compile("\\d+").matcher(a).results().mapToLong(r -> Long.parseLong(r.group())).toArray();
+        long[] y = java.util.regex.Pattern.compile("\\d+").matcher(b).results().mapToLong(r -> Long.parseLong(r.group())).toArray();
+        for (int i = 0; i < Math.max(x.length, y.length); i++) {
+            long c = (i < x.length ? x[i] : 0) - (i < y.length ? y[i] : 0);
+            if (c != 0) {
+                return c < 0 ? -1 : 1;
+            }
+        }
+        return 0;
+    }
+
+    private String describeLink() {
+        ZebraLink link = activeLink;
+        if (link != null) {
+            return link.toString();
+        }
+        return modeIdentifier == null ? "reader default" : "mode " + modeIdentifier;
+    }
+
+    /**
+     * Read the ROSpec back and log anything that differs from what was sent.
+     */
+    private void verifyROSpec() {
+        GET_ROSPECS_RESPONSE response;
+        try {
+            response = transact(new GET_ROSPECS(), GET_ROSPECS_RESPONSE.class);
+        } catch (ZebraException ex) {
+            logger.debug("Reader {}: unable to read back the ROSpec: {}", readerID, ex.getMessage());
+            return;
+        }
+        if (logger.isDebugEnabled()) {
+            try {
+                logger.debug("Reader {} ROSpecs as stored: {}", readerID, response.toXMLString());
+            } catch (Exception ex) {
+                logger.debug("Reader {}: unable to log the ROSpec: {}", readerID, ex.getMessage());
+            }
+        }
+
+        Set<String> mismatches = new LinkedHashSet<>();
+        boolean found = false;
+        boolean customSeen = false;
+        for (ROSpec rs : response.getROSpecList() == null ? List.<ROSpec>of() : response.getROSpecList()) {
+            if (rs.getROSpecID() == null || rs.getROSpecID().toLong() != ROSPEC_ID || rs.getSpecParameterList() == null) {
+                continue;
+            }
+            for (SpecParameter sp : rs.getSpecParameterList()) {
+                if (!(sp instanceof AISpec ai) || ai.getInventoryParameterSpecList() == null) {
+                    continue;
+                }
+                for (InventoryParameterSpec ips : ai.getInventoryParameterSpecList()) {
+                    if (ips.getAntennaConfigurationList() == null) {
+                        continue;
+                    }
+                    for (AntennaConfiguration ac : ips.getAntennaConfigurationList()) {
+                        if (ac.getAirProtocolInventoryCommandSettingsList() == null) {
+                            continue;
+                        }
+                        for (AirProtocolInventoryCommandSettings settings : ac.getAirProtocolInventoryCommandSettingsList()) {
+                            if (!(settings instanceof C1G2InventoryCommand cmd)) {
+                                continue;
+                            }
+                            found = true;
+                            if (cmd.getCustomList() != null && !cmd.getCustomList().isEmpty()) {
+                                customSeen = true;
+                            }
+                            C1G2RFControl rf = cmd.getC1G2RFControl();
+                            if (rf != null && modeIdentifier != null && rf.getModeIndex() != null && rf.getModeIndex().intValue() != modeIdentifier) {
+                                mismatches.add("RF mode " + rf.getModeIndex() + " (sent " + modeIdentifier + ")");
+                            }
+                            if (rf != null && tariNs != 0 && rf.getTari() != null && rf.getTari().intValue() != tariNs) {
+                                mismatches.add("Tari " + rf.getTari() + " ns (sent " + tariNs + ")");
+                            }
+                            C1G2SingulationControl sc = cmd.getC1G2SingulationControl();
+                            if (sc != null && sc.getSession() != null && sc.getSession().intValue() != session) {
+                                mismatches.add("session " + sc.getSession().intValue() + " (sent " + session + ")");
+                            }
+                            if (sc != null && sc.getTagPopulation() != null && sc.getTagPopulation().intValue() != tagPopulation) {
+                                mismatches.add("tag population " + sc.getTagPopulation() + " (sent " + tagPopulation + ")");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            logger.debug("Reader {} did not report the ROSpec's antenna settings", readerID);
+            return;
+        }
+        if (!mismatches.isEmpty()) {
+            logger.warn("Reader {} reports different inventory settings than PikaReader sent: {}", readerID, mismatches);
+        }
+        AbFlipPlan plan = activePlan;
+        if (activeSearchMode == SearchMode.AB_FLIP && plan != null && plan.usesZebraParams()) {
+            if (customSeen) {
+                logger.info("Reader {} kept the Zebra custom settings ({})", readerID, plan);
+            } else {
+                logger.info("Reader {} accepted the {} ROSpec but does not report the Zebra custom settings back, so they can't be confirmed",
+                        readerID, plan);
+            }
+        }
     }
 
     /**
@@ -828,14 +1443,26 @@ public class Zebra implements RFIDReader {
         rospec.setROBoundarySpec(boundary);
 
         switch (mode) {
+            case AB_FLIP -> {
+                AbFlipPlan plan = activePlan == null ? new AbFlipPlan(true, StopMode.ZEBRA) : activePlan;
+                if (plan.stop() == StopMode.PER_ANTENNA) {
+                    // One AISpec per antenna, in port order
+                    int specID = 1;
+                    for (Integer port : enabledAntennas) {
+                        rospec.addToSpecParameterList(buildAISpec(specID++, List.of(port), null, 0, plan));
+                    }
+                } else {
+                    rospec.addToSpecParameterList(buildAISpec(1, enabledAntennas, null, 0, plan));
+                }
+            }
             case DUAL_TARGET -> {
-                rospec.addToSpecParameterList(buildAISpec(1, C1G2TagInventoryStateAwareI.State_A, dwellMs));
-                rospec.addToSpecParameterList(buildAISpec(2, C1G2TagInventoryStateAwareI.State_B, dwellMs));
+                rospec.addToSpecParameterList(buildAISpec(1, enabledAntennas, C1G2TagInventoryStateAwareI.State_A, dwellMs, null));
+                rospec.addToSpecParameterList(buildAISpec(2, enabledAntennas, C1G2TagInventoryStateAwareI.State_B, dwellMs, null));
             }
             case SINGLE_TARGET ->
-                rospec.addToSpecParameterList(buildAISpec(1, C1G2TagInventoryStateAwareI.State_A, 0));
+                rospec.addToSpecParameterList(buildAISpec(1, enabledAntennas, C1G2TagInventoryStateAwareI.State_A, 0, null));
             case READER_DEFAULT ->
-                rospec.addToSpecParameterList(buildAISpec(1, null, 0));
+                rospec.addToSpecParameterList(buildAISpec(1, enabledAntennas, null, 0, null));
         }
 
         // Report every tag read immediately so the TagReadProcessor can pick
@@ -868,16 +1495,29 @@ public class Zebra implements RFIDReader {
      * @param target C1G2TagInventoryStateAwareI.State_A / State_B, or null for
      * a state-unaware inventory where the reader picks the target
      * @param durationMs AISpec duration, or 0 to run until the ROSpec stops
+     * @param plan how to do AB_FLIP, or null for the other search modes
      */
-    private AISpec buildAISpec(int specID, Integer target, int durationMs) {
+    private AISpec buildAISpec(int specID, List<Integer> ports, Integer target, int durationMs, AbFlipPlan plan) {
         AISpec aispec = new AISpec();
 
         UnsignedShortArray antennaIDs = new UnsignedShortArray();
-        enabledAntennas.forEach(a -> antennaIDs.add(new UnsignedShort(a)));
+        ports.forEach(a -> antennaIDs.add(new UnsignedShort(a)));
         aispec.setAntennaIDs(antennaIDs);
 
         AISpecStopTrigger stopTrigger = new AISpecStopTrigger();
-        if (durationMs > 0) {
+        if (plan != null && plan.stop() == StopMode.PER_ANTENNA) {
+            // End after the role's inventory rounds on this antenna, capped
+            // by a timeout
+            TagObservationTrigger observation = new TagObservationTrigger();
+            observation.setTriggerType(new TagObservationTriggerType(TagObservationTriggerType.N_Attempts_To_See_All_Tags_In_FOV_Or_Timeout));
+            observation.setNumberOfTags(new UnsignedShort(0));
+            observation.setNumberOfAttempts(new UnsignedShort(inventoryCycles));
+            observation.setT(new UnsignedShort(0));
+            observation.setTimeout(new UnsignedInteger(extensionFallbacks().getJSONObject("antenna_stop").optInt("timeout_ms", 100)));
+            stopTrigger.setAISpecStopTriggerType(new AISpecStopTriggerType(AISpecStopTriggerType.Tag_Observation));
+            stopTrigger.setDurationTrigger(new UnsignedInteger(0));
+            stopTrigger.setTagObservationTrigger(observation);
+        } else if (durationMs > 0) {
             stopTrigger.setAISpecStopTriggerType(new AISpecStopTriggerType(AISpecStopTriggerType.Duration));
             stopTrigger.setDurationTrigger(new UnsignedInteger(durationMs));
         } else {
@@ -890,7 +1530,13 @@ public class Zebra implements RFIDReader {
         inventory.setInventoryParameterSpecID(new UnsignedShort(specID));
         inventory.setProtocolID(new AirProtocols(AirProtocols.EPCGlobalClass1Gen2));
 
-        for (Integer port : enabledAntennas) {
+        // The Select reset A/B flip fallback inventories the A tags after a
+        // Select has set every tag to A
+        boolean selectReset = plan != null && !plan.zebraQuery();
+        // (Integer.valueOf: a bare int constant here would unbox a null target)
+        Integer singulationTarget = selectReset ? Integer.valueOf(C1G2TagInventoryStateAwareI.State_A) : target;
+
+        for (Integer port : ports) {
             AntennaConfiguration antenna = new AntennaConfiguration();
             antenna.setAntennaID(new UnsignedShort(port));
 
@@ -910,12 +1556,15 @@ public class Zebra implements RFIDReader {
             }
 
             C1G2InventoryCommand command = new C1G2InventoryCommand();
-            command.setTagInventoryStateAware(new Bit(target != null));
+            command.setTagInventoryStateAware(new Bit(singulationTarget != null));
+            if (selectReset) {
+                command.addToC1G2FilterList(selectResetFilter());
+            }
 
             if (modeIdentifier != null) {
                 C1G2RFControl rf = new C1G2RFControl();
                 rf.setModeIndex(new UnsignedShort(modeIdentifier));
-                rf.setTari(new UnsignedShort(0)); // 0 = let the reader pick within the mode's range
+                rf.setTari(new UnsignedShort(tariNs)); // 0 = let the reader pick within the mode's range
                 command.setC1G2RFControl(rf);
             }
 
@@ -923,14 +1572,23 @@ public class Zebra implements RFIDReader {
             singulation.setSession(new TwoBitField(Integer.toString(session)));
             singulation.setTagPopulation(new UnsignedShort(tagPopulation));
             singulation.setTagTransitTime(new UnsignedInteger(0));
-            if (target != null) {
+            if (singulationTarget != null) {
                 C1G2TagInventoryStateAwareSingulationAction action = new C1G2TagInventoryStateAwareSingulationAction();
-                action.setI(new C1G2TagInventoryStateAwareI(target));
-                // Sel = ~SL, which matches every tag in its power-up state
+                action.setI(new C1G2TagInventoryStateAwareI(singulationTarget));
+                // Sel = ~SL, which matches every tag in its power-up state.
+                // (LLRP's state-aware action has no "ignore SL".)
                 action.setS(new C1G2TagInventoryStateAwareS(C1G2TagInventoryStateAwareS.Not_SL));
                 singulation.setC1G2TagInventoryStateAwareSingulationAction(action);
             }
             command.setC1G2SingulationControl(singulation);
+
+            if (plan != null) {
+                Custom moto = ZebraMotoParams.antennaConfig(ProfileManager.getInstance().getZebraCustom(), inventoryCycles,
+                        plan.stop() == StopMode.ZEBRA, plan.zebraQuery());
+                if (moto != null) {
+                    command.addToCustomList(moto);
+                }
+            }
 
             antenna.addToAirProtocolInventoryCommandSettingsList(command);
             inventory.addToAntennaConfigurationList(antenna);
@@ -938,6 +1596,36 @@ public class Zebra implements RFIDReader {
 
         aispec.addToInventoryParameterSpecList(inventory);
         return aispec;
+    }
+
+    private static JSONObject extensionFallbacks() {
+        return ProfileManager.getInstance().getReaderData("zebra_fx").getJSONObject("extension_fallbacks");
+    }
+
+    /**
+     * The Select for the A/B flip fallback (extension_fallbacks.ab_flip): a
+     * zero-length mask matches every tag, and the action sets the session's
+     * inventoried flag to A.
+     */
+    private C1G2Filter selectResetFilter() {
+        JSONObject f = extensionFallbacks().getJSONObject("ab_flip").getJSONObject("c1g2_filter");
+        JSONObject m = f.getJSONObject("mask");
+        JSONObject a = f.getJSONObject("state_aware_action");
+
+        C1G2TagInventoryMask mask = new C1G2TagInventoryMask();
+        mask.setMB(new TwoBitField(Integer.toString(m.getInt("memory_bank"))));
+        mask.setPointer(new UnsignedShort(m.getInt("pointer_bits")));
+        mask.setTagMask(new BitArray_HEX(m.getInt("length_bits")));
+
+        C1G2TagInventoryStateAwareFilterAction action = new C1G2TagInventoryStateAwareFilterAction();
+        action.setTarget(new C1G2StateAwareTarget(a.getString("target").replace("<session>", "S" + session)));
+        action.setAction(new C1G2StateAwareAction(a.getString("action")));
+
+        C1G2Filter filter = new C1G2Filter();
+        filter.setT(new C1G2TruncateAction(C1G2TruncateAction.Do_Not_Truncate));
+        filter.setC1G2TagInventoryMask(mask);
+        filter.setC1G2TagInventoryStateAwareFilterAction(action);
+        return filter;
     }
 
     /*
@@ -1048,9 +1736,15 @@ public class Zebra implements RFIDReader {
                 return;
             }
 
+            AbFlipPlan plan = activePlan;
+            boolean perAntenna = activeSearchMode == SearchMode.AB_FLIP && plan != null && plan.stop() == StopMode.PER_ANTENNA;
+            boolean endsEachCycle = activeSearchMode == SearchMode.DUAL_TARGET || perAntenna;
+
             long now = System.nanoTime();
             long ranMs = (now - lastStartNanos) / 1_000_000L;
-            long healthyMs = activeSearchMode == SearchMode.DUAL_TARGET ? dwellMs : 1000;
+            // One AISpec per antenna can legitimately finish in a few ms
+            // when no tags are in the field
+            long healthyMs = activeSearchMode == SearchMode.DUAL_TARGET ? dwellMs : perAntenna ? 2 : 1000;
             quickROSpecEnds = ranMs < healthyMs / 2 ? quickROSpecEnds + 1 : 0;
             if (quickROSpecEnds >= MAX_QUICK_ROSPEC_ENDS) {
                 logger.error("Reader {} keeps ending its ROSpec after only {} ms. Not restarting it; will retry in a few seconds.", readerID, ranMs);
@@ -1058,10 +1752,10 @@ public class Zebra implements RFIDReader {
                 return;
             }
 
-            if (preempted || activeSearchMode != SearchMode.DUAL_TARGET) {
+            if (preempted || !endsEachCycle) {
                 logger.warn("Reader {} ROSpec {} unexpectedly. Restarting it.", readerID, preempted ? "was preempted" : "ended");
             } else {
-                logger.trace("Reader {} dual target cycle complete, restarting the ROSpec", readerID);
+                logger.trace("Reader {} {} cycle complete, restarting the ROSpec", readerID, activeSearchMode);
             }
 
             START_ROSPEC start = new START_ROSPEC();

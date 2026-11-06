@@ -31,6 +31,8 @@ import com.jcraft.jsch.JSch;
 import com.pikatimer.pikareader.readers.LlrpTls;
 import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderClock;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -41,6 +43,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Semaphore;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -79,13 +82,12 @@ public class Impinj implements RFIDReader {
     private Integer antennaCount = 0;
     private long lastAntennaUpdateTS = 0L;
 
-    // Inventory settings from the config. A null reader mode means "pick the
-    // default for this reader" (see connect()). Modes are Impinj RF mode
-    // numbers; ImpinjRfMode has the names.
-    private Integer configuredReaderMode = null;
-    private SearchMode searchMode = SearchMode.DualTargetBtoASelect;
-    private int session = 2; // the Octane SDK default
-    private int tagPopulation = 128;
+    // What the reader told us on the last connect
+    private volatile FeatureSet features = null;
+    // The profile settings last applied to the reader (see configure()), and
+    // the RF mode the reader accepted (null = the reader's own default)
+    private volatile ImpinjProfile activeProfile = null;
+    private volatile Integer appliedMode = null;
 
     // "Clock": "Local" (default) sets the reader's clock from the local clock over SSH.
     // "Clock": "NTP" leaves the reader's own NTP-synced clock alone.
@@ -282,8 +284,8 @@ public class Impinj implements RFIDReader {
     /**
      * "Reader Mode": an ImpinjRfMode name, or any Impinj RF mode number. A
      * number is passed to the reader as-is, so modes that only newer readers
-     * have (e.g. on the R700) can be used. connect() checks it against the
-     * modes the reader reports.
+     * have (e.g. on the R700) can be used. Used for a profile's "Reader Mode"
+     * override.
      *
      * @return the mode number, or null to use the default for the reader
      */
@@ -316,50 +318,6 @@ public class Impinj implements RFIDReader {
             logger.warn("Reader {} is set to MaxThroughput. This is usually a poor choice when other readers are nearby.", readerID);
         }
         return mode;
-    }
-
-    /**
-     * Pick the RF mode to use.
-     *
-     * The reader's mode list comes from its LLRP RF mode table, which usually
-     * leaves out the AutoSet modes even on readers that support them (the
-     * R420 does). So AutoSet modes are only checked against the list when the
-     * list includes some AutoSet modes.
-     *
-     * @return the mode, or null to let the reader use its own default
-     */
-    Integer chooseRfMode(List<Integer> supportedModes) {
-        boolean haveList = supportedModes != null && !supportedModes.isEmpty();
-        boolean listsAutoSet = haveList && supportedModes.stream().anyMatch(ImpinjRfMode::isAutoSet);
-
-        Integer mode = configuredReaderMode;
-        if (mode != null && haveList && !supportedModes.contains(mode)
-                && (!ImpinjRfMode.isAutoSet(mode) || listsAutoSet)) {
-            logger.warn("Reader {} does not list {} as a supported reader mode. Using the default instead.", readerID, ImpinjRfMode.describe(mode));
-            mode = null;
-        }
-        if (mode != null) {
-            return mode;
-        }
-
-        // We default to the static fast mode as we have a dynamic tag
-        // environment and want a faster read rate at the cost of a slight
-        // loss of range. See https://support.impinj.com/hc/en-us/articles/360000046899
-        // AutoSetStaticFast is not available on 1 and 2 port readers, so
-        // those fall back to AutoSetDenseReader.
-        List<ImpinjRfMode> preferred = antennaCount > 2
-                ? List.of(ImpinjRfMode.AutoSetStaticFast, ImpinjRfMode.AutoSetDenseReader, ImpinjRfMode.AutoSetDenseReaderDeepScan)
-                : List.of(ImpinjRfMode.AutoSetDenseReader, ImpinjRfMode.AutoSetDenseReaderDeepScan);
-        if (!listsAutoSet) {
-            return preferred.get(0).getValue();
-        }
-        for (ImpinjRfMode m : preferred) {
-            if (supportedModes.contains(m.getValue())) {
-                return m.getValue();
-            }
-        }
-        logger.warn("Reader {} lists none of {} as supported. Letting the reader use its own default mode.", readerID, preferred);
-        return null;
     }
 
     /**
@@ -415,7 +373,7 @@ public class Impinj implements RFIDReader {
         return false;
     }
 
-    private static int clamp(Integer readerID, String key, int value, int min, int max) {
+    static int clamp(Integer readerID, String key, int value, int min, int max) {
         if (value < min || value > max) {
             int v = Math.max(min, Math.min(max, value));
             logger.warn("Reader {}: \"{}\" must be between {} and {}. Using {}.", readerID, key, min, max, v);
@@ -446,11 +404,12 @@ public class Impinj implements RFIDReader {
                 }
                 reader.connect(readerIP, readerPort, useTls);
 
-                FeatureSet features = reader.queryFeatureSet();
-                antennaCount = Long.valueOf(features.getAntennaCount()).intValue();
-                List<Integer> supportedModes = features.getRfModes();
-                logger.info("Impinj reader {}: {} ({}) firmware {}, {} antenna ports, supported reader modes: {}",
-                        readerID, features.getModelName(), features.getReaderModel(), features.getFirmwareVersion(), antennaCount,
+                FeatureSet f = reader.queryFeatureSet();
+                features = f;
+                antennaCount = Long.valueOf(f.getAntennaCount()).intValue();
+                List<Integer> supportedModes = f.getRfModes();
+                logger.info("Impinj reader {}: {} ({}) firmware {}, {} antenna ports, region: {}, supported reader modes: {}",
+                        readerID, f.getModelName(), f.getReaderModel(), f.getFirmwareVersion(), antennaCount, describeRegion(f),
                         supportedModes == null ? "unknown" : supportedModes.stream().map(ImpinjRfMode::describe).toList());
 
                 // The reader may have rebooted or had its clock changed while we were away
@@ -464,115 +423,12 @@ public class Impinj implements RFIDReader {
 
                 reader.setReaderStartListener(new ImpinjReaderStartStopListener(this));
                 reader.setReaderStopListener(new ImpinjReaderStartStopListener(this));
-
-                Settings settings = reader.queryDefaultSettings();
-                //logger.info("Current Reader Mode: {}", settings.getReaderMode().toString());
-                //logger.info("Current Reader Search Mode: {}", settings.getSearchMode().toString());
-
-                ReportConfig report = settings.getReport();
-                report.setIncludeAntennaPortNumber(true);
-                report.setMode(ReportMode.Individual);
-                report.setIncludePeakRssi(Boolean.TRUE);
-                //report.setIncludePhaseAngle(Boolean.TRUE);
-                report.setIncludeLastSeenTime(Boolean.FALSE);
-                report.setIncludeFirstSeenTime(Boolean.TRUE);
-                report.setIncludeSeenCount(Boolean.FALSE);
-                //settings.setReport(report);
-
-                // Use the configured reader mode if this reader supports it,
-                // otherwise the best default it supports (see chooseRfMode).
-                // null leaves the choice to the reader.
-                Integer mode = chooseRfMode(supportedModes);
-                settings.setRfMode(mode);
-
-                // By default we don't want to miss new tags in the 'A' state
-                // entering the field when we are inventorying the 'B' tags
-                // So we go with the Dual Target B -> A Select mode
-                // See https://support.impinj.com/hc/en-us/articles/202756158
-                settings.setSearchMode(searchMode);
-                settings.setSession(session);
-                settings.setTagPopulationEstimate(tagPopulation);
-
-                logger.info("Reader {} inventory: reader mode {}, search mode {}, session {}, tag population {}, clock {}",
-                        readerID, ImpinjRfMode.describe(mode), searchMode.name(), session, tagPopulation, useNTP ? "NTP" : "Local");
-
-                // Enable keepalivbes
-                settings.getKeepalives().setEnabled(true);
-                settings.getKeepalives().setPeriodInMs(3000);
                 reader.setKeepaliveListener(new ImpinjKeepaliveTimeoutListener());
-
-                //TODO:  More testing and incorporating the exampels
-                // show in the SDK samples DisconnectedOperation.java file
-                // Enable Connection Monitoring
-                settings.getKeepalives().setEnableLinkMonitorMode(true);
-                settings.getKeepalives().setLinkDownThreshold(5);
-
-                // Antenna Settings
-                // Antennas are numbered from 1 -> 4
-                AntennaConfigGroup antennas = settings.getAntennas();
-
-                antennas.enableAll();
-
-                // Set the power levels and sensitivity
-                powerLevel = ImpinjPowerLevels.getLevel(readerConfig.optString("Power Level"));
-                logger.info("Setting power level for reader {} to {} ({})", readerID, powerLevel.getLevel(), powerLevel.getDBm());
-                antennas.setIsMaxRxSensitivity(true);
-                
-                // Set the setIsMaxTxPower to false otherwise 
-                // the system ignores the setTxPowerinDbm call. 
-                if(ImpinjPowerLevels.MAX.equals(powerLevel)) {
-                    antennas.setIsMaxTxPower(true);
-                } else {
-                    antennas.setIsMaxTxPower(false);
-                    antennas.setTxPowerinDbm(powerLevel.getDBm());
-                }
-
-                // Enable / Disable antennas based on the reader config
-                antennas.enableAll();
-                JSONObject antennaConfig = readerConfig.optJSONObject("Antenna Config");
-                if (antennaConfig != null) {
-                    antennaConfig.keySet().forEach(k -> {
-                        if (antennaConfig.optString(k).toLowerCase().startsWith("disable")) try {
-                            antennas.getAntenna(Integer.valueOf(k)).setEnabled(false);
-                        } catch (Exception ex) {
-                            logger.warn("Exception disabling antenna port {} for reader {}", k, readerID);
-                        }
-                    });
-                }
-                
-               
                 reader.setTagReportListener(new ImpinjTagReportListener(readerID, clock));
-
-                
-                reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
-                    try {
-                        Boolean enabled = antennas.getAntenna(a.getPortNumber()).isEnabled();
-                        logger.info(" Antenna Status: Reader: {} Port: {} Enabled: {} Connected: {} ", readerID, a.getPortNumber(), enabled, a.isConnected());
-                        String s = enabled ? a.isConnected() ? "Connected" : "Disconnected" : "Disabled";
-                        Integer port = (int) a.getPortNumber();
-                        antennaStatus.put(port, s);
-                    } catch (Exception e) {
-                        logger.warn("Er, it did not like port {}", a.getPortNumber());
-                    }
-                });
-                
                 reader.setAntennaChangeListener(new ImpinjAntennaChangeListener(this));
 
-                logger.debug("Applying Settings for readerID {}", readerID);
-                try {
-                    reader.applySettings(settings);
-                } catch (OctaneSdkException ex) {
-                    if (settings.getRfMode() == null) {
-                        throw ex;
-                    }
-                    // Most likely a reader model whose modes we guessed wrong.
-                    // Reading with the reader's own default beats not reading.
-                    logger.warn("Reader {} rejected the settings with reader mode {} ({}). Retrying with the reader's own default mode.",
-                            readerID, ImpinjRfMode.describe(settings.getRfMode()), ex.getMessage());
-                    settings.setRfMode(null);
-                    reader.applySettings(settings);
-                    logger.info("Reader {} is using its own default reader mode", readerID);
-                }
+                // Inventory, antenna and report settings for the current profile
+                configure();
 
                 // set up a listener for connection Lost
                 reader.setConnectionLostListener(new ImpinjConnectionLostListener(this));
@@ -600,6 +456,273 @@ public class Impinj implements RFIDReader {
         
         return (reader != null && reader.isConnected());
 
+    }
+
+    /**
+     * Build and apply the reader settings for the current profile. The caller
+     * holds reader_command_semaphore, and the reader is connected and not
+     * reading.
+     */
+    private void configure() throws OctaneSdkException {
+        ProfileManager profiles = ProfileManager.getInstance();
+        ReaderProfile profile = profiles.getCurrent();
+        FeatureSet f = features;
+        List<Integer> supportedModes = f == null ? null : f.getRfModes();
+
+        ImpinjProfile p = ImpinjProfile.resolve(profiles, profile, readerConfig, readerID,
+                f == null ? null : f.getReaderModel(), detectedRegion(f), describeRegion(f));
+
+        Settings settings = reader.queryDefaultSettings();
+
+        ReportConfig report = settings.getReport();
+        report.setIncludeAntennaPortNumber(true);
+        report.setMode(ReportMode.Individual);
+        report.setIncludePeakRssi(Boolean.TRUE);
+        //report.setIncludePhaseAngle(Boolean.TRUE);
+        report.setIncludeLastSeenTime(Boolean.FALSE);
+        report.setIncludeFirstSeenTime(Boolean.TRUE);
+        report.setIncludeSeenCount(Boolean.FALSE);
+
+        // The profiles use Dual Target B -> A Select by default, so new tags
+        // entering the field in the 'A' state aren't missed while we are
+        // inventorying the 'B' tags.
+        // See https://support.impinj.com/hc/en-us/articles/202756158
+        settings.setSearchMode(p.searchMode());
+        settings.setSession(p.session());
+        settings.setTagPopulationEstimate(p.tagPopulation());
+        // Keep inventorying even when no tags are in the field
+        settings.getLowDutyCycle().setIsEnabled(false);
+
+        // Enable keepalives
+        settings.getKeepalives().setEnabled(true);
+        settings.getKeepalives().setPeriodInMs(3000);
+
+        //TODO:  More testing and incorporating the exampels
+        // show in the SDK samples DisconnectedOperation.java file
+        // Enable Connection Monitoring
+        settings.getKeepalives().setEnableLinkMonitorMode(true);
+        settings.getKeepalives().setLinkDownThreshold(5);
+
+        // Antenna Settings
+        // Antennas are numbered from 1 -> 4
+        AntennaConfigGroup antennas = settings.getAntennas();
+
+        antennas.enableAll();
+
+        // Set the power levels and sensitivity
+        powerLevel = p.powerLevel();
+        logger.info("Setting power level for reader {} to {} ({})", readerID, powerLevel.getLevel(), powerLevel.getDBm());
+        antennas.setIsMaxRxSensitivity(true);
+
+        // Set the setIsMaxTxPower to false otherwise
+        // the system ignores the setTxPowerinDbm call.
+        if (ImpinjPowerLevels.MAX.equals(powerLevel)) {
+            antennas.setIsMaxTxPower(true);
+        } else {
+            antennas.setIsMaxTxPower(false);
+            antennas.setTxPowerinDbm(powerLevel.getDBm());
+        }
+
+        // Enable / Disable antennas based on the reader config
+        antennas.enableAll();
+        JSONObject antennaConfig = readerConfig.optJSONObject("Antenna Config");
+        if (antennaConfig != null) {
+            antennaConfig.keySet().forEach(k -> {
+                if (antennaConfig.optString(k).toLowerCase().startsWith("disable")) try {
+                    antennas.getAntenna(Integer.valueOf(k)).setEnabled(false);
+                } catch (Exception ex) {
+                    logger.warn("Exception disabling antenna port {} for reader {}", k, readerID);
+                }
+            });
+        }
+
+        reader.queryStatus().getAntennaStatusGroup().getAntennaList().forEach(a -> {
+            try {
+                Boolean enabled = antennas.getAntenna(a.getPortNumber()).isEnabled();
+                logger.info(" Antenna Status: Reader: {} Port: {} Enabled: {} Connected: {} ", readerID, a.getPortNumber(), enabled, a.isConnected());
+                String s = enabled ? a.isConnected() ? "Connected" : "Disconnected" : "Disabled";
+                Integer port = (int) a.getPortNumber();
+                antennaStatus.put(port, s);
+            } catch (Exception e) {
+                logger.warn("Er, it did not like port {}", a.getPortNumber());
+            }
+        });
+
+        logger.debug("Applying Settings for readerID {}", readerID);
+        Integer mode = applySettings(settings, p, supportedModes);
+        p = p.withFallbackModes(offeredFallbackModes(p, supportedModes, mode));
+        activeProfile = p;
+        appliedMode = mode;
+
+        logger.info("Reader {} {} profile: reader mode {}, search mode {}, session {}, tag population {}, power {}, clock {} (settings from: {})",
+                readerID, profile.name(), ImpinjRfMode.describe(mode), p.searchMode().name(), p.session(), p.tagPopulation(),
+                powerLevel.getLevel(), useNTP ? "NTP" : "Local", p.sources());
+        if (!p.fallbackModes().isEmpty()) {
+            logger.info("Reader {} {} profile fallback reader modes (use one with a \"Reader Mode\" override): {}",
+                    readerID, profile.name(), p.fallbackModes().stream().map(ImpinjRfMode::describe).toList());
+        }
+
+        verifySettings(p, mode);
+    }
+
+    /**
+     * Apply the settings with the profile's first RF mode the reader accepts.
+     * If it accepts none of them, use the reader's own default mode, since
+     * reading with it beats not reading.
+     *
+     * @return the RF mode in use, or null for the reader's default
+     */
+    private Integer applySettings(Settings settings, ImpinjProfile p, List<Integer> supportedModes) throws OctaneSdkException {
+        List<Integer> candidates = p.rfModes();
+        boolean haveList = supportedModes != null && !supportedModes.isEmpty();
+        // The LLRP mode table usually leaves out the AutoSet modes even on
+        // readers that support them (the R420 does)
+        boolean listsAutoSet = haveList && supportedModes.stream().anyMatch(ImpinjRfMode::isAutoSet);
+
+        for (int i = 0; i < candidates.size(); i++) {
+            Integer mode = candidates.get(i);
+            if (haveList && !supportedModes.contains(mode) && (!ImpinjRfMode.isAutoSet(mode) || listsAutoSet)) {
+                logger.warn("Reader {} does not list reader mode {} as supported. Trying it anyway.", readerID, ImpinjRfMode.describe(mode));
+            }
+            settings.setRfMode(mode);
+            try {
+                reader.applySettings(settings);
+                if (i > 0) {
+                    logger.info("Reader {} accepted reader mode {} for the {} profile", readerID, ImpinjRfMode.describe(mode), p.profile().name());
+                }
+                return mode;
+            } catch (OctaneSdkException ex) {
+                logger.warn("Reader {} rejected reader mode {} ({}).{}", readerID, ImpinjRfMode.describe(mode), ex.getMessage(),
+                        i + 1 < candidates.size() ? " Trying " + ImpinjRfMode.describe(candidates.get(i + 1)) + "." : "");
+            }
+        }
+
+        if (!candidates.isEmpty()) {
+            logger.error("Reader {} accepted none of the reader modes {} for the {} profile. Using the reader's own default mode instead.",
+                    readerID, candidates.stream().map(ImpinjRfMode::describe).toList(), p.profile().name());
+        }
+        settings.setRfMode(null);
+        reader.applySettings(settings);
+        return null;
+    }
+
+    /**
+     * Fallback modes are only offered to the operator, so drop the one the
+     * reader is already using (e.g. an R220 that fell through to mode 2) and
+     * the ones this reader doesn't list. LLRP modes 0-5 are kept: newer
+     * readers map them to their own regional modes.
+     */
+    private List<Integer> offeredFallbackModes(ImpinjProfile p, List<Integer> supportedModes, Integer appliedMode) {
+        boolean haveList = supportedModes != null && !supportedModes.isEmpty();
+        List<Integer> kept = new ArrayList<>();
+        for (Integer m : p.fallbackModes()) {
+            if (m.equals(appliedMode)) {
+                logger.debug("Reader {}: fallback reader mode {} is the mode already in use", readerID, ImpinjRfMode.describe(m));
+            } else if (!haveList || m <= 5 || supportedModes.contains(m)) {
+                kept.add(m);
+            } else {
+                logger.info("Reader {}: not offering fallback reader mode {} for the {} profile, since the reader does not list it",
+                        readerID, ImpinjRfMode.describe(m), p.profile().name());
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * Read the settings back from the reader and log anything that differs
+     * from what was applied.
+     */
+    private void verifySettings(ImpinjProfile p, Integer mode) {
+        try {
+            Settings applied = reader.querySettings();
+            List<String> mismatches = new ArrayList<>();
+            if (applied.getSession() != p.session()) {
+                mismatches.add("session " + applied.getSession() + " (applied " + p.session() + ")");
+            }
+            if (applied.getSearchMode() != p.searchMode()) {
+                mismatches.add("search mode " + applied.getSearchMode() + " (applied " + p.searchMode() + ")");
+            }
+            if (applied.getTagPopulationEstimate() != p.tagPopulation()) {
+                mismatches.add("tag population " + applied.getTagPopulationEstimate() + " (applied " + p.tagPopulation() + ")");
+            }
+            if (!mismatches.isEmpty()) {
+                logger.warn("Reader {} reports different settings than PikaReader applied: {}", readerID, mismatches);
+            }
+            if (mode != null && !Objects.equals(applied.getRfMode(), mode)) {
+                // Newer readers report the regional mode an LLRP mode maps to
+                logger.info("Reader {} reports reader mode {} (applied {})", readerID,
+                        ImpinjRfMode.describe(applied.getRfMode()), ImpinjRfMode.describe(mode));
+            }
+            if (mismatches.isEmpty()) {
+                logger.debug("Reader {} settings read back OK", readerID);
+            }
+        } catch (Exception ex) {
+            logger.debug("Reader {}: unable to read back the settings: {}", readerID, ex.getMessage());
+        }
+    }
+
+    private static String detectedRegion(FeatureSet f) {
+        if (f == null) {
+            return null;
+        }
+        return ProfileManager.regionFamily(f.getCommunicationsStandard() == null ? null : f.getCommunicationsStandard().intValue(),
+                f.getTxFrequencies());
+    }
+
+    private static String describeRegion(FeatureSet f) {
+        if (f == null) {
+            return "unknown";
+        }
+        List<Double> freqs = f.getTxFrequencies();
+        String fr = freqs == null || freqs.isEmpty() ? "no frequency list"
+                : String.format(Locale.ROOT, "%d frequencies %.2f-%.2f", freqs.size(),
+                        freqs.stream().mapToDouble(Double::doubleValue).min().orElse(0),
+                        freqs.stream().mapToDouble(Double::doubleValue).max().orElse(0));
+        return "communications standard " + f.getCommunicationsStandard() + ", " + fr;
+    }
+
+    @Override
+    public void applyProfile() {
+        String name = ProfileManager.getInstance().getCurrent().name();
+        if (reading || !reader.isConnected()) {
+            logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
+            return;
+        }
+        try {
+            // The SDK reports connected while a connect is still in progress,
+            // so this can wait for that connect to finish. It may have
+            // applied the previous profile, so apply the current one again.
+            reader_command_semaphore.acquire();
+            try {
+                if (reader.isConnected() && !reading) {
+                    configure();
+                } else {
+                    logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
+                }
+            } finally {
+                reader_command_semaphore.release();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ex) {
+            logger.error("Reader {}: unable to apply the {} profile: {}", readerID, ProfileManager.getInstance().getCurrent().name(), ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public JSONObject getProfileSettings() {
+        ImpinjProfile p = activeProfile;
+        ReaderProfile current = ProfileManager.getInstance().getCurrent();
+        if (p != null && p.profile().equals(current)) {
+            JSONObject o = p.toJSON(appliedMode);
+            o.put("applied", true);
+            return o;
+        }
+        JSONObject o = new JSONObject();
+        o.put("profile", current.id());
+        o.put("applied", false);
+        o.put("note", "The profile is applied when the reader connects");
+        return o;
     }
 
     @Override
@@ -673,10 +796,8 @@ public class Impinj implements RFIDReader {
             LlrpTls.allowLegacyCertificates();
         }
 
-        newReader.configuredReaderMode = parseReaderMode(config.optString("Reader Mode", ""), newReader.readerID);
-        newReader.searchMode = parseSearchMode(config.optString("Search Mode", ""), newReader.readerID);
-        newReader.session = clamp(newReader.readerID, "Session", config.optInt("Session", 2), 0, 3);
-        newReader.tagPopulation = clamp(newReader.readerID, "Tag Population", config.optInt("Tag Population", 128), 1, 65535);
+        // Inventory settings come from the selected profile (see configure())
+        ProfileManager.getInstance().checkReaderConfig(config, newReader.readerID, ImpinjProfile.OVERRIDE_KEYS);
         newReader.useNTP = parseUseNTP(config.optString("Clock", ""), newReader.readerID);
         newReader.clock = new ReaderClock(newReader.readerID, ReaderClock.Mode.READER, newReader.useNTP
                 ? "Is NTP configured and working on the reader? Set \"Clock\": \"Local\" to have PikaReader set the reader's clock instead."

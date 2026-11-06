@@ -17,10 +17,14 @@
 package com.pikatimer.pikareader.readers;
 
 import com.pikatimer.pikareader.conf.PikaConfig;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.status.StatusHandler;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.Set;
@@ -47,7 +51,7 @@ public class ReaderHandler {
 
     private final JSONObject readerConfig;
 
-    private Boolean isReading = false;
+    private volatile Boolean isReading = false;
 
     /**
      * SingletonHolder is loaded on the first execution of
@@ -98,9 +102,9 @@ public class ReaderHandler {
             pikaConfig.putObject("Reader", readerConfig);
         }
 
-        // itterate through the readers and set them up
-        CountDownLatch latch = new CountDownLatch(readerConfig.getJSONArray("Readers").length());
+        // Find the readers we can set up
         Set<Integer> seenIndexes = new HashSet<>();
+        List<JSONObject> validReaders = new ArrayList<>();
         readerConfig.getJSONArray("Readers").forEach(r -> {
             JSONObject rc = (JSONObject) r; // FFS
             Integer index = rc.getInt("Index");
@@ -108,17 +112,28 @@ public class ReaderHandler {
 
             if (!seenIndexes.add(index)) {
                 logger.error("RFID Reader Config Error! More than one reader uses Index {}. Each reader needs a unique Index. Ignoring the duplicate {} reader.", index, type);
-                latch.countDown();
             } else if (rfidReaderFactory.containsKey(type)) {
-                Thread.startVirtualThread(() -> {
-                    RFIDReader reader = rfidReaderFactory.get(type).create(rc);
-                    readers.put(index, reader);
-                    latch.countDown();
-                });
+                validReaders.add(rc);
             } else {
                 logger.error("RFID Reader Config Error! No handler found for RFID Reader type {}", type);
-                latch.countDown();
             }
+        });
+
+        // Load the selected profile and give each reader its session before
+        // the readers start connecting
+        ProfileManager.getInstance().assignSessions(validReaders.stream().map(rc -> rc.getInt("Index")).sorted().toList());
+
+        // itterate through the readers and set them up
+        CountDownLatch latch = new CountDownLatch(validReaders.size());
+        validReaders.forEach(rc -> {
+            Thread.startVirtualThread(() -> {
+                try {
+                    RFIDReader reader = rfidReaderFactory.get(rc.getString("Type")).create(rc);
+                    readers.put(rc.getInt("Index"), reader);
+                } finally {
+                    latch.countDown();
+                }
+            });
         });
         try {
             latch.await(30, TimeUnit.SECONDS);
@@ -135,7 +150,7 @@ public class ReaderHandler {
         return isReading;
     }
 
-    public void startReading() {
+    public synchronized void startReading() {
         CountDownLatch latch = new CountDownLatch(readers.size());
 
         // Start all readers in parallel. 
@@ -164,7 +179,7 @@ public class ReaderHandler {
 
     }
 
-    public void stopReading() {
+    public synchronized void stopReading() {
         logger.info("Stopping Readers");
         CountDownLatch latch = new CountDownLatch(readers.size());
         readers.values().parallelStream().forEach(r -> {
@@ -181,6 +196,54 @@ public class ReaderHandler {
 
     public Collection<RFIDReader> getReaders() {
         return readers.values();
+    }
+
+    /**
+     * Select a reader profile, save it in the config and re-apply every
+     * reader's settings. Only allowed while the readers are not reading.
+     * Readers that aren't connected pick it up when they connect.
+     *
+     * @param name the profile id or display name
+     * @return the selected profile
+     * @throws IllegalArgumentException for an unknown profile
+     * @throws IllegalStateException while reading
+     */
+    public synchronized ReaderProfile setProfile(String name) {
+        ProfileManager profiles = ProfileManager.getInstance();
+        ReaderProfile profile = profiles.find(name)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown reader profile '" + name + "'"));
+        if (isReading) {
+            throw new IllegalStateException("Stop reading before changing the reader profile");
+        }
+        if (profile.equals(profiles.getCurrent())) {
+            logger.info("Reader profile is already {}", profile);
+            return profile;
+        }
+
+        profiles.setCurrent(profile);
+
+        logger.info("Applying the {} profile to the readers", profile);
+        CountDownLatch latch = new CountDownLatch(readers.size());
+        readers.values().forEach(r -> {
+            Thread.startVirtualThread(() -> {
+                try {
+                    r.applyProfile();
+                } catch (Exception ex) {
+                    logger.error("Unable to apply the {} profile to reader {}", profile, r.getID(), ex);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        });
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                logger.warn("Timed out waiting for the readers to apply the {} profile", profile);
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+        logger.info("Reader profile {} applied", profile);
+        return profile;
     }
 
 }

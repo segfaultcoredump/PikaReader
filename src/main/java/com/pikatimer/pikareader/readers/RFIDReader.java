@@ -41,6 +41,23 @@ public interface RFIDReader {
     
 
     public RFIDReader create(JSONObject rc);
-    
+
     public Map<Integer,String> getAntennaStatus();
+
+    /**
+     * Re-apply the reader settings for the current profile
+     * (ProfileManager.getCurrent()). Only called while the readers are not
+     * reading. A reader that isn't connected picks up the current profile
+     * when it next connects.
+     */
+    public default void applyProfile() {
+    }
+
+    /**
+     * @return the settings this reader is using for the current profile, for
+     * the /profile api
+     */
+    public default JSONObject getProfileSettings() {
+        return new JSONObject();
+    }
 }

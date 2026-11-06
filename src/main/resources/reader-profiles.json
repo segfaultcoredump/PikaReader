@@ -1,0 +1,345 @@
+{
+  "schema_version": 4,
+  "updated": "2026-11-05",
+  "notes": "Baseline reader profiles for race timing, loaded by ProfileManager. Validate on hardware before race use. A reader's \"Profiles\" entry in the PikaReader config overrides these values.",
+
+  "default_profile": "finish_mats",
+
+  "session_rule": "Sessions are not set per profile. With several readers, PikaReader gives them sessions 2, 3, 2, 3... in Index order. With one reader it picks 2 or 3 at random when it starts. A reader's \"Session\" override wins.",
+
+  "region_families": {
+    "fcc":          { "description": "US and Canada, FCC Part 15, 902-928 MHz. Impinj FCC models, Zebra US SKUs." },
+    "global_other": { "description": "Non-FCC regions inside 902-928 MHz, e.g. Australia, Brazil, Singapore, China, Korea. Impinj R700 FGX models configured for a non-FCC region; Speedway GX1/GX2/GX3 models." },
+    "etsi_lb":      { "description": "EU lower band, 865-868 MHz (EN 302 208), and India 865-867 MHz. Impinj EU1 models." },
+    "etsi_hb":      { "description": "EU upper band, around 915-921 MHz. Impinj EU2 models." },
+    "japan":        { "description": "Japan, 916-921 MHz. Impinj JP models, Zebra JP SKUs." }
+  },
+
+  "roles": {
+    "start_mats": {
+      "name": "Start Mats",
+      "order": 1,
+      "description": "Start line mats. Dense waves of runners, walking to jogging.",
+      "tag_population": 32
+    },
+    "finish_mats": {
+      "name": "Finish Mats",
+      "order": 3,
+      "description": "Finish line mats. 1-10 runners at once at 3-6 m/s; maximize reads per tag for a sharp RSSI peak.",
+      "tag_population": 16
+    },
+    "finish_side_panels": {
+      "name": "Finish Panels",
+      "order": 4,
+      "description": "Side panels at the finish. Backup to the mats; catches tags shadowed by bodies; finishers linger in the chute.",
+      "tag_population": 32
+    },
+    "start_side_panels": {
+      "name": "Start Panels",
+      "order": 2,
+      "description": "Side panels at the start. Deep, packed crowd in view; catches bibs the mats missed; timing is secondary.",
+      "tag_population": 64
+    },
+    "split_side_panels": {
+      "name": "Split Side Panels",
+      "order": 5,
+      "description": "On-course split with side panels only. Panels are the only timing source and must read the full road width.",
+      "tag_population": 16,
+      "tag_population_early_split_large_race": 32
+    }
+  },
+
+  "reporting": {
+    "report_every_read": true,
+    "fields": ["epc", "antenna_port", "peak_rssi", "first_seen_timestamp", "channel"]
+  },
+
+  "readers": {
+    "impinj_speedway": {
+      "models": ["r420", "r220"],
+      "api": "octane_sdk",
+      "model_support": {
+        "r420": {
+          "ports": 4,
+          "max_read_rate_tags_per_s": 1100,
+          "gen2_reader_modes": 10,
+          "regions": ["fcc", "global_other", "etsi_lb", "etsi_hb", "japan"]
+        },
+        "r220": {
+          "ports": 2,
+          "max_read_rate_tags_per_s": 200,
+          "gen2_reader_modes": 5,
+          "regions": ["fcc", "global_other", "etsi_lb"],
+          "not_recommended_roles": ["start_mats"],
+          "caution_roles": ["finish_mats"],
+          "notes": [
+            "Impinj lists Max Throughput, Hybrid and Max Miller as R420 features, and the R220 supports half as many reader modes. Expect Max Miller to be rejected; the candidate lists then fall through to Dense Reader M4 (mode 2).",
+            "200 tags/s caps reads per pass: about 5 reads per tag for 10 runners crossing in half a second, before antenna or hub switching. Best suited to side panels and quiet splits.",
+            "Two ports, or up to 16 read zones with Speedway Antenna Hubs. A 4-8 antenna mat row needs hubs or three or more R220s per row.",
+            "Sold in FCC, GX1, GX2 and EU1 versions only; there is no EU2 or Japan R220."
+          ]
+        }
+      },
+      "search_mode": "DualTargetBtoASelect",
+      "low_duty_cycle_enabled": false,
+      "antenna_switching": "automatic",
+      "mode_names": {
+        "2": "DenseReaderM4",
+        "3": "DenseReaderM8",
+        "4": "MaxMiller (FCC, and EU2 / ETSI HB)",
+        "5": "Max Miller variant used in ETSI LB, Japan and similar regions; find the SDK constant whose value is 5"
+      },
+      "mode_selection": "rf_mode is an ordered candidate list: apply the first mode the reader accepts. Fallback modes are operator options; drop any the reader rejects or that equals the applied primary mode.",
+      "region_tables": [
+        {
+          "applies_to": ["fcc", "global_other", "etsi_lb", "etsi_hb", "japan"],
+          "roles": {
+            "start_mats":         { "rf_mode": [4, 5, 2], "fallback_modes": [2] },
+            "finish_mats":        { "rf_mode": [4, 5, 2], "fallback_modes": [] },
+            "finish_side_panels": { "rf_mode": [4, 5, 2], "fallback_modes": [3] },
+            "start_side_panels":  { "rf_mode": [2],    "fallback_modes": [3] },
+            "split_side_panels":  { "rf_mode": [4, 5, 2], "fallback_modes": [2] }
+          }
+        }
+      ]
+    },
+
+    "impinj_r700_series": {
+      "models": ["r700", "r720"],
+      "api": "octane_sdk_or_iot_interface",
+      "model_support": {
+        "r700": { "status": "current", "ports": 4, "max_read_rate_tags_per_s": 1300 },
+        "r720": {
+          "status": "end_of_life_in_progress",
+          "ports": 4,
+          "max_read_rate_tags_per_s": 1100,
+          "notes": [
+            "Part of the R700 Series, whose reader-modes application note covers the series as a whole, so the R700 region tables apply. Confirm the modes on hardware.",
+            "Impinj's April 2026 spec table lists the R720 as in the end-of-life process. Don't plan new purchases around it."
+          ]
+        }
+      },
+      "search_mode": "DualTargetBtoASelect",
+      "iot_search_mode": "dual-target-with-b-to-a-select",
+      "low_duty_cycle_enabled": false,
+      "antenna_switching": "automatic",
+      "rf_mode_notes": "Modes 2-5 are LLRP modes and map to the right static mode for the reader's region. Modes 141, 142, 185, 288, 380 and 5xxx are R700 static or Gen2X modes. Gen2X test modes need firmware 8.4+ and only make sense when at least 20% of bibs use Impinj M800-series chips.",
+      "region_tables": [
+        {
+          "applies_to": ["fcc"],
+          "llrp_mode_equivalents": { "2": 142, "3": 185, "4": 140 },
+          "roles": {
+            "start_mats":         { "rf_mode": [4],   "fallback_modes": [142],      "gen2x_test_mode": 5140 },
+            "finish_mats":        { "rf_mode": [4],   "fallback_modes": [141],      "gen2x_test_mode": 5140 },
+            "finish_side_panels": { "rf_mode": [141], "fallback_modes": [142, 185], "gen2x_test_mode": 5142 },
+            "start_side_panels":  { "rf_mode": [2],   "fallback_modes": [185],      "gen2x_test_mode": 5142 },
+            "split_side_panels":  { "rf_mode": [141], "fallback_modes": [142] }
+          }
+        },
+        {
+          "applies_to": ["etsi_lb", "japan"],
+          "llrp_mode_equivalents": { "2": 246, "3": 290, "5": 245 },
+          "roles": {
+            "start_mats":         { "rf_mode": [5], "fallback_modes": [2],      "gen2x_test_mode": 5245 },
+            "finish_mats":        { "rf_mode": [5], "fallback_modes": [2],      "gen2x_test_mode": 5245 },
+            "finish_side_panels": { "rf_mode": [2], "fallback_modes": [288, 3], "gen2x_test_mode": 5246 },
+            "start_side_panels":  { "rf_mode": [2], "fallback_modes": [3],      "gen2x_test_mode": 5246 },
+            "split_side_panels":  { "rf_mode": [2], "fallback_modes": [288] }
+          }
+        },
+        {
+          "applies_to": ["global_other"],
+          "llrp_mode_equivalents": { "2": 246, "3": 290, "5": 245 },
+          "roles": {
+            "start_mats":         { "rf_mode": [5], "fallback_modes": [2],      "gen2x_test_mode": 5245 },
+            "finish_mats":        { "rf_mode": [5], "fallback_modes": [2],      "gen2x_test_mode": 5245 },
+            "finish_side_panels": { "rf_mode": [2], "fallback_modes": [288, 3], "gen2x_test_mode": 5247 },
+            "start_side_panels":  { "rf_mode": [2], "fallback_modes": [3],      "gen2x_test_mode": 5247 },
+            "split_side_panels":  { "rf_mode": [2], "fallback_modes": [288] }
+          }
+        },
+        {
+          "applies_to": ["etsi_hb"],
+          "llrp_mode_equivalents": { "2": 340, "3": 381, "4": 341 },
+          "roles": {
+            "start_mats":         { "rf_mode": [4], "fallback_modes": [2],      "gen2x_test_mode": 5341 },
+            "finish_mats":        { "rf_mode": [4], "fallback_modes": [2],      "gen2x_test_mode": 5341 },
+            "finish_side_panels": { "rf_mode": [2], "fallback_modes": [380, 3], "gen2x_test_mode": 5340 },
+            "start_side_panels":  { "rf_mode": [2], "fallback_modes": [3],      "gen2x_test_mode": 5340 },
+            "split_side_panels":  { "rf_mode": [2], "fallback_modes": [380] }
+          }
+        }
+      ]
+    },
+
+    "zebra_fx": {
+      "models": ["fx7400", "fx7500", "fx9500", "fx9600", "fxr90"],
+      "api": "raw_llrp",
+      "search_mode": "ab_flip",
+      "applies_to": ["fcc", "global_other", "etsi_lb", "etsi_hb", "japan"],
+      "link_selection": "For each link class, use the first candidate the reader's GET_READER_CAPABILITIES mode table offers. If no candidate matches exactly, apply the class's nearest rule and log that it was used. Drop any fallback that resolves to the same mode and Tari as the primary or an earlier fallback.",
+      "model_support": {
+        "fx7500": {
+          "status": "current",
+          "published_mode_tables": ["fcc", "etsi", "japan"],
+          "zebra_extensions": "documented",
+          "antenna_extensions": "supported"
+        },
+        "fx9600": {
+          "status": "current",
+          "published_mode_tables": ["fcc", "etsi", "japan"],
+          "zebra_extensions": "documented",
+          "antenna_extensions": "supported"
+        },
+        "fx7400": {
+          "status": "legacy",
+          "published_mode_tables": [],
+          "zebra_extensions": "unverified; detect at runtime",
+          "antenna_extensions": "unsupported",
+          "notes": [
+            "Zebra Software Interface Control Guide, Table 4 (LLRP Custom Parameters Per Product) lists MotoAntennaConfig, MotoAntennaStopCondition and MotoAntennaQueryConfig as not supported, so the standard-LLRP fallbacks are used.",
+            "Older link set built around 250 and 300 kHz BLFs (M4 and M8), so exact candidates are unlikely to match and the nearest rules apply.",
+            "Some M8 profiles turn off the dense-reader filter (firmware 2.2.0.5 notes). Prefer dense-interrogator entries when the capability table marks them.",
+            "ETSI models stop continuous RF after 20 s with no tags seen (firmware 2.2.0.5 notes). Check that sparse splits don't miss the first runner after a gap.",
+            "Max conducted power +30 dBm US, +29.6 dBm EU (FX Series integrator guide)."
+          ]
+        },
+        "fx9500": {
+          "status": "legacy",
+          "published_mode_tables": [],
+          "zebra_extensions": "unverified; detect at runtime",
+          "min_firmware": "1.5.5",
+          "antenna_extensions": "unsupported",
+          "notes": [
+            "Zebra Software Interface Control Guide, Table 4 (LLRP Custom Parameters Per Product) lists MotoAntennaConfig, MotoAntennaStopCondition and MotoAntennaQueryConfig as not supported, so the standard-LLRP fallbacks are used.",
+            "Firmware 1.5.5 fixes a C1G2Filter with an empty tag mask returning an error; the AB flip fallback depends on that filter.",
+            "Most Reader Management (RM) commands are unsupported. Configure over LLRP only."
+          ]
+        },
+        "fxr90": {
+          "status": "current",
+          "published_mode_tables": [],
+          "zebra_extensions": "unverified; detect at runtime",
+          "antenna_extensions": "unknown",
+          "notes": [
+            "Supports GS1 LLRP 1.0.1 on all SKUs. LLRP and the IoT Connector share the reader: the first connection wins and only one is active.",
+            "Under LLRP, reader profiles and operational statistics are not supported.",
+            "Default LLRP port 5084; 5085 when secure mode is enabled.",
+            "4 or 8 ports; 0 to +33 dBm on PoE+ or DC, +31.5 dBm on PoE; -92 dBm receive sensitivity.",
+            "Japan LBT is supported with a selectable channel."
+          ]
+        }
+      },
+      "extension_fallbacks": {
+        "detection": "Try the Zebra custom parameter first. If the reader rejects it, rebuild the ROSpec with the standard-LLRP fallback and remember the result per reader serial number and firmware version.",
+        "ab_flip": {
+          "replaces": "MotoAntennaQueryConfig (EnableABFlip, EnableSLAll)",
+          "method": "select_reset",
+          "description": "Before each inventory round, a Select sets every tag's inventoried flag for the session to A; the round then reads A tags and flips them to B. This behaves like Impinj's B-to-A Select.",
+          "requires_capability": "CanDoTagInventoryStateAwareSingulation",
+          "c1g2_inventory_command": { "tag_inventory_state_aware": true },
+          "c1g2_filter": {
+            "mask": { "memory_bank": 1, "pointer_bits": 32, "length_bits": 0 },
+            "state_aware_action": { "target": "Inventoried_State_For_Session_<session>", "action": "AssertSLOrA_DeassertSLOrB" }
+          },
+          "singulation_action": { "inventoried_state": "State_A", "sl": "ignore" }
+        },
+        "antenna_stop": {
+          "replaces": "MotoAntennaStopCondition",
+          "method": "one_aispec_per_antenna",
+          "description": "Give each antenna its own AISpec in the ROSpec. Each AISpec ends after the role's antenna_stop_inventory_cycles attempts, capped by a timeout.",
+          "aispec_stop_trigger": "Tag_Observation",
+          "tag_observation_trigger_type": "Upon_N_Attempts_To_See_All_Tags_In_FOV",
+          "number_of_attempts_from": "antenna_stop_inventory_cycles",
+          "timeout_ms": 100
+        }
+      },
+      "roles": {
+        "start_mats":         { "link_class": "m4_fast",  "fallback_link_classes": ["m4_mid"],               "antenna_stop_inventory_cycles": 2 },
+        "finish_mats":        { "link_class": "m4_fast",  "fallback_link_classes": ["m4_mid_alt", "m4_mid"], "ab_test_against": "m4_mid_alt", "antenna_stop_inventory_cycles": 1 },
+        "finish_side_panels": { "link_class": "m4_mid",   "fallback_link_classes": ["m4_dense", "m8"],       "antenna_stop_inventory_cycles": 1 },
+        "start_side_panels":  { "link_class": "m4_dense", "fallback_link_classes": ["m8"],                   "antenna_stop_inventory_cycles": 2 },
+        "split_side_panels":  { "link_class": "m4_mid",   "fallback_link_classes": ["m4_dense"],             "antenna_stop_inventory_cycles": 1 }
+      },
+      "nearest_rule_order": "Only when no candidate matches exactly. Consider entries with the class's M value, never automac. Rank by: (1) BLF (BDR x M) closest to blf_khz, or highest for \"highest\", with ties going to the lower BLF; (2) spectral mask: dense interrogator, then multi, then single or unknown; (3) pie_preference order; (4) Tari on the entry's grid closest to tari_ns, or the shortest allowed for \"shortest\", with ties going to the longer Tari.",
+      "link_classes": {
+        "m4_fast": {
+          "description": "Fastest available Miller-4 link (Max Miller class). Used on mats.",
+          "nearest": { "m": 4, "blf_khz": "highest", "tari_ns": "shortest", "pie_preference": [1500, 2000] },
+          "candidates": [
+            { "m": 4, "bdr_bps": 160000, "pie": 1500, "tari_ns": 6250,  "known_indexes": { "fcc": { "fx9600": 38 } } },
+            { "m": 4, "bdr_bps": 160000, "pie": 2000, "tari_ns": 6250,  "known_indexes": { "fcc": { "fx7500": 37 } } },
+            { "m": 4, "bdr_bps": 120000, "pie": 1500, "tari_ns": 10400, "known_indexes": { "fcc": { "fx9600": 36 } } },
+            { "m": 4, "bdr_bps": 120000, "pie": 2000, "tari_ns": 10400, "known_indexes": { "fcc": { "fx9600": 37, "fx7500": 36 } } },
+            { "m": 4, "bdr_bps": 80000,  "pie": 1500, "tari_ns": 12500, "known_indexes": { "fcc": { "fx9600": 21, "fx7500": 21 }, "etsi": { "fx9600": 19, "fx7500": 19 } } },
+            { "m": 4, "bdr_bps": 80000,  "pie": 2000, "tari_ns": 12500, "known_indexes": { "fcc": { "fx9600": 22, "fx7500": 22 }, "etsi": { "fx9600": 20, "fx7500": 20 }, "japan": { "fx9600": 10 } } },
+            { "m": 4, "bdr_bps": 64000,  "pie": 2000, "tari_ns": 25000, "known_indexes": { "fcc": { "fx9600": 19, "fx7500": 19 }, "etsi": { "fx9600": 17, "fx7500": 17 }, "japan": { "fx9600": 8, "fx7500": 4 } } }
+          ]
+        },
+        "m4_mid": {
+          "description": "Miller-4 at about 320 kHz with a long Tari. Used on finish side panels and splits.",
+          "nearest": { "m": 4, "blf_khz": 320, "tari_ns": 18800, "pie_preference": [2000, 1500] },
+          "candidates": [
+            { "m": 4, "bdr_bps": 80000, "pie": 2000, "tari_ns": 18800, "known_indexes": { "fcc": { "fx9600": 22, "fx7500": 22 }, "etsi": { "fx9600": 20, "fx7500": 20 }, "japan": { "fx9600": 10 } } },
+            { "m": 4, "bdr_bps": 64000, "pie": 2000, "tari_ns": 20900, "known_indexes": { "fcc": { "fx9600": 20, "fx7500": 20 }, "etsi": { "fx9600": 18, "fx7500": 18 }, "japan": { "fx9600": 9 } } },
+            { "m": 4, "bdr_bps": 64000, "pie": 2000, "tari_ns": 25000, "known_indexes": { "fcc": { "fx9600": 19, "fx7500": 19 }, "etsi": { "fx9600": 17, "fx7500": 17 }, "japan": { "fx9600": 8, "fx7500": 4 } } }
+          ]
+        },
+        "m4_mid_alt": {
+          "description": "Miller-4 at about 320 kHz with a short Tari. Finish-mat A/B test and first fallback.",
+          "nearest": { "m": 4, "blf_khz": 320, "tari_ns": "shortest", "pie_preference": [1500, 2000] },
+          "candidates": [
+            { "m": 4, "bdr_bps": 80000, "pie": 1500, "tari_ns": 12500, "known_indexes": { "fcc": { "fx9600": 21, "fx7500": 21 }, "etsi": { "fx9600": 19, "fx7500": 19 } } },
+            { "m": 4, "bdr_bps": 80000, "pie": 2000, "tari_ns": 12500, "known_indexes": { "fcc": { "fx9600": 22, "fx7500": 22 }, "etsi": { "fx9600": 20, "fx7500": 20 }, "japan": { "fx9600": 10 } } }
+          ]
+        },
+        "m4_dense": {
+          "description": "Miller-4 at about 256 kHz (Dense Reader M4 class). Used on start side panels.",
+          "nearest": { "m": 4, "blf_khz": 256, "tari_ns": 20900, "pie_preference": [2000, 1500] },
+          "candidates": [
+            { "m": 4, "bdr_bps": 64000, "pie": 2000, "tari_ns": 20900, "known_indexes": { "fcc": { "fx9600": 20, "fx7500": 20 }, "etsi": { "fx9600": 18, "fx7500": 18 }, "japan": { "fx9600": 9 } } },
+            { "m": 4, "bdr_bps": 64000, "pie": 2000, "tari_ns": 25000, "known_indexes": { "fcc": { "fx9600": 19, "fx7500": 19 }, "etsi": { "fx9600": 17, "fx7500": 17 }, "japan": { "fx9600": 8, "fx7500": 4 } } }
+          ]
+        },
+        "m8": {
+          "description": "Miller-8 at about 256 kHz (Dense Reader M8 class). Most sensitive fallback.",
+          "nearest": { "m": 8, "blf_khz": 256, "tari_ns": 25000, "pie_preference": [2000, 1500] },
+          "candidates": [
+            { "m": 8, "bdr_bps": 32000, "pie": 2000, "tari_ns": 25000, "known_indexes": { "fcc": { "fx9600": 32, "fx7500": 32 }, "etsi": { "fx9600": 28, "fx7500": 28 }, "japan": { "fx9600": 14, "fx7500": 6 } } },
+            { "m": 8, "bdr_bps": 30000, "pie": 2000, "tari_ns": 25000, "known_indexes": { "fcc": { "fx9600": 28, "fx7500": 28 }, "etsi": { "fx9600": 24, "fx7500": 24 }, "japan": { "fx9600": 12, "fx7500": 5 } } }
+          ]
+        }
+      }
+    }
+  },
+
+  "zebra_llrp_custom": {
+    "vendor_id": 161,
+    "moto_antenna_config_subtype": 703,
+    "moto_antenna_stop_condition_subtype": 704,
+    "moto_antenna_query_config_subtype": 710,
+    "antenna_stop_trigger_number_inventory_cycles": 1,
+    "enable_ab_flip": true,
+    "enable_sl_all": true,
+    "automac_index_never_use": { "fcc": 23, "etsi": 21 }
+  },
+
+  "regional_notes": {
+    "etsi_lb": {
+      "channels_mhz": [865.7, 866.3, 866.9, 867.5],
+      "note": "Only four high-power channels. Impinj's Speedway guide describes a 4 s maximum continuous transmit and 100 ms off before reusing a channel. Readers that share a channel interfere.",
+      "channel_plan_suggestion": {
+        "applies_when": "Standard finish layout: two mat-row readers plus one side-panel reader",
+        "finish_mats": [865.7, 866.3],
+        "finish_side_panels": [866.9, 867.5]
+      }
+    },
+    "japan": {
+      "channels_mhz": [916.8, 918.0, 919.2, 920.4],
+      "note": "Impinj JP2 readers use four channels and are limited to 30 dBm. Apply the same channel principle as ETSI LB where the reader allows it."
+    },
+    "etsi_hb": {
+      "note": "Few channels. Apply the same channel principle as ETSI LB where the reader allows it."
+    }
+  }
+}

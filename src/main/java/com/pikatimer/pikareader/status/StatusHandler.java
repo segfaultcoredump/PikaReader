@@ -20,6 +20,8 @@ import com.pikatimer.pikareader.conf.PikaConfig;
 import com.pikatimer.pikareader.http.HTTPHandler;
 import com.pikatimer.pikareader.readers.RFIDReader;
 import com.pikatimer.pikareader.readers.ReaderHandler;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.tags.TagRead;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -96,6 +98,12 @@ public class StatusHandler {
                 statusReport.put("lastChipReadTime", lastChipRead.getTimestamp().format(formatter));
             }
             statusReport.put("unitID", pikaConfig.getStringValue("UnitID"));
+
+            ReaderProfile profile = ProfileManager.getInstance().getCurrent();
+            JSONObject profileStatus = new JSONObject();
+            profileStatus.put("id", profile.id());
+            profileStatus.put("name", profile.name());
+            statusReport.put("profile", profileStatus);
 
             logger.trace("Getting readers");
 

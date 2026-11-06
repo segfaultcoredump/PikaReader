@@ -45,6 +45,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             <div class="row">
                 <div class="d-grid gap-2 col-6 mx-auto py-2" id="readingButton"></div>
             </div>
+            <!-- Reader Profile -->
+            <div class="row">
+                <div class="col-10 col-md-6 mx-auto py-2 text-center">
+                    <label for="profileSelect" class="form-label display-8">Reader Profile</label>
+                    <select class="form-select form-select-lg" id="profileSelect" aria-describedby="profileHelp" onchange="profileSelected()" disabled></select>
+                    <div id="profileHelp" class="form-text"></div>
+                </div>
+            </div>
             <div class="row justify-content-center">
                 <!-- Date / Time Block -->
                 <div class="col-md-3 text-center">
@@ -57,6 +65,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                 <div class="col-md-3 text-center">
                     <div class="display-6">Reader Status</div>
                     <div class="display-8" id="readerStatus"></div>
+                    <div class="display-8" id="profileName"></div>
                     <div class="display-8" id="readRate"></div>
                 </div>
             </div>
@@ -136,6 +145,43 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             </div>
         </div>
 
+        <!-- Change Profile Prompt -->
+        <div class="modal fade" id="profileModalPrompt" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="profilePromptLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="profilePromptLabel">Change Reader Profile</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" onClick="cancelProfileChange()"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="display-8" id="profilePromptBody"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" onClick="cancelProfileChange()">Cancel</button>
+                        <button type="button" class="btn btn-warning" data-bs-dismiss="modal" data-bs-toggle="modal" data-bs-target="#profileModal" onClick="changeProfile()">Change Profile</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Change Profile Result -->
+        <div class="modal fade" id="profileModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="profileModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="profileModalLabel">Change Reader Profile</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="display-8" id="profileBody">Changing the reader profile...</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Trigger Modal -->
         <div class="modal fade" id="triggerModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="staticBackdropLabel" aria-hidden="true">
             <div class="modal-dialog">
@@ -171,6 +217,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             var readerStatus = document.getElementById("readerStatus");
             var readRate = document.getElementById("readRate");
             var antennaStatus = document.getElementById("antennaStatus");
+            var profileSelect = document.getElementById("profileSelect");
+            var profileHelp = document.getElementById("profileHelp");
+            var profileName = document.getElementById("profileName");
+            var currentProfile = null;  // the profile id the server is using
+            var profileNames = {};      // profile id -> display name
+            var pendingProfile = null;  // a profile change waiting to be confirmed or applied
             var eventSocket = "ws://" + window.location.host + "/status";
             webSocket = new WebSocket(eventSocket);
             webSocket.onmessage = function (message) {
@@ -216,6 +268,22 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                         readerStatusDisplay += r.status;
                     });
                     readerStatus.innerHTML = readerStatusDisplay;
+
+                    // Reader profile. Only touch the select when the profile
+                    // changed, so an open dropdown isn't reset every second.
+                    if (status.profile) {
+                        profileName.textContent = "Profile: " + status.profile.name;
+                        if (status.profile.id !== currentProfile && pendingProfile === null) {
+                            currentProfile = status.profile.id;
+                            if (profileNames[currentProfile] === undefined) {
+                                loadProfiles();
+                            } else {
+                                profileSelect.value = currentProfile;
+                            }
+                        }
+                    }
+                    updateProfileControls();
+
                     connectionStatus.innerHTML = "Connected";
                 }
             };
@@ -246,6 +314,92 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                         });
 
             }
+
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+            }
+
+            function loadProfiles() {
+                fetch("http://" + window.location.host + "/profiles")
+                        .then((response) => response.json())
+                        .then((data) => {
+                            profileSelect.innerHTML = "";
+                            data.profiles.forEach(function (p) {
+                                profileNames[p.id] = p.name;
+                                var option = document.createElement("option");
+                                option.value = p.id;
+                                option.textContent = p.name;
+                                option.title = p.description;
+                                profileSelect.appendChild(option);
+                            });
+                            if (pendingProfile === null) {
+                                currentProfile = data.current;
+                            }
+                            profileSelect.value = currentProfile;
+                            updateProfileControls();
+                        });
+            }
+
+            // The profile can only be changed while the reader is stopped
+            function updateProfileControls() {
+                profileSelect.disabled = reading || pendingProfile !== null || profileSelect.options.length === 0;
+                profileHelp.textContent = reading ? "Stop the reader to change the profile" : "";
+            }
+
+            function profileSelected() {
+                var selected = profileSelect.value;
+                if (selected === currentProfile) {
+                    return;
+                }
+                pendingProfile = selected;
+                updateProfileControls();
+                document.getElementById("profilePromptBody").innerHTML = "Change the reader profile from <b>" +
+                        escapeHtml(profileNames[currentProfile]) + "</b> to <b>" + escapeHtml(profileNames[selected]) + "</b>?";
+                bootstrap.Modal.getOrCreateInstance(document.getElementById("profileModalPrompt")).show();
+            }
+
+            function cancelProfileChange() {
+                pendingProfile = null;
+                profileSelect.value = currentProfile;
+                updateProfileControls();
+            }
+
+            function changeProfile() {
+                var target = pendingProfile;
+                var profileBody = document.getElementById("profileBody");
+                profileBody.textContent = "Changing the reader profile to " + profileNames[target] + "...";
+                fetch("http://" + window.location.host + "/profile/" + encodeURIComponent(target), {method: "PUT"})
+                        .then((response) => response.json().then((data) => ({ok: response.ok, data: data})))
+                        .then((result) => {
+                            if (result.ok) {
+                                currentProfile = result.data.id;
+                                var html = "Profile changed to <b>" + escapeHtml(result.data.name) + "</b> at<br> " + escapeHtml(result.data.timestamp);
+                                // e.g. a reader model that isn't suited to this profile
+                                var warnings = [];
+                                (result.data.readers || []).forEach(function (r) {
+                                    ((r.settings && r.settings.warnings) || []).forEach(function (w) {
+                                        warnings.push(w);
+                                    });
+                                });
+                                if (warnings.length > 0) {
+                                    html += '<div class="alert alert-warning mt-3 mb-0">' + warnings.map(escapeHtml).join("<br>") + "</div>";
+                                }
+                                profileBody.innerHTML = html;
+                            } else {
+                                profileBody.textContent = "Unable to change the profile: " + result.data.error;
+                            }
+                        })
+                        .catch((error) => {
+                            profileBody.textContent = "Unable to change the profile: " + error;
+                        })
+                        .finally(() => {
+                            pendingProfile = null;
+                            profileSelect.value = currentProfile;
+                            updateProfileControls();
+                        });
+            }
+
+            loadProfiles();
 
             function fireTrigger() {
                 console.log("firing a Trigger...");
