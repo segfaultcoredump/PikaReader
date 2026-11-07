@@ -187,7 +187,7 @@ public class HTTPHandler {
                 Instant now = Instant.now();
                 TagRead tr = new TagRead();
                 tr.setEPC("0");
-                tr.setEpochMilli(now.getEpochSecond());
+                tr.setEpochMilli(now.toEpochMilli());
                 tr.setTimestamp(LocalDateTime.now(PikaConfig.getInstance().getTimezoneId()));
                 tr.setTZOffset(ZonedDateTime.ofInstant(now, PikaConfig.getInstance().getTimezoneId()).getOffset().toString());
                 tr.setReaderID(0);
