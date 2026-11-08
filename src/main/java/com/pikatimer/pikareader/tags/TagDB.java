@@ -32,8 +32,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Stream;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -46,12 +46,18 @@ import org.slf4j.LoggerFactory;
  */
 public class TagDB {
 
-    private static final BlockingQueue<Collection<TagRead>> tagQueue = new ArrayBlockingQueue<>(100);
+    // Reads not yet written to disk. Unbounded so addReads() never blocks or
+    // throws on the router thread, whatever the read rate.
+    private static final BlockingQueue<TagRead> pending = new LinkedBlockingQueue<>();
     private static final Logger logger = LoggerFactory.getLogger(TagDB.class);
     private static final PikaConfig pikaConfig = PikaConfig.getInstance();
     private final JSONObject dbConfig;
     private final Path dbPath;
+    // All of today's reads. Guarded by synchronized (tagList): the DB thread
+    // loads it while the router adds to it and HTTP threads copy it.
     private static final List<TagRead> tagList = new ArrayList<>();
+    // Serializes file writes between the DB thread and flush()
+    private final Object writeLock = new Object();
 
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("/yyyy/MM/dd/HH/HH-mm-ss.SSS'.dat'");
     private static final DateTimeFormatter dayDirFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd");
@@ -101,46 +107,39 @@ public class TagDB {
             Path todayPath = dbPath.resolve(LocalDate.now().format(dayDirFormatter));
             if (Files.isDirectory(todayPath)) {
                 try (Stream<Path> walk = Files.walk(todayPath)) {
-                    walk.filter(Files::isRegularFile).forEach(f -> tagList.addAll(readFile(f)));
+                    walk.filter(Files::isRegularFile).forEach(f -> {
+                        List<TagRead> reads = readFile(f);
+                        synchronized (tagList) {
+                            tagList.addAll(reads);
+                        }
+                    });
                 } catch (IOException ex) {
                     logger.error("Error reading DB at {}", todayPath.toAbsolutePath().toString(), ex);
                 }
             }
             Instant end = Instant.now();
             Duration elapsed = Duration.between(start, end);
-            logger.info("Loaded TagDB in {}ms with {} reads from today", elapsed.toMillis(), tagList.size());
+            int loaded;
+            synchronized (tagList) {
+                loaded = tagList.size();
+            }
+            logger.info("Loaded TagDB in {}ms with {} reads from today", elapsed.toMillis(), loaded);
 
-            // Setup loop to add new tag reads to a new file as they come in. 
-            // To save on IO and more importantly, survive a sudden filesystem shutdown when the 
-            // user pulls the power, each cycle will dump all of the tags into a single file. 
-            // generally speaking, this will produce no more than 1 file per gating perod. 
+            // Write the new reads out as they come in. To save on IO and, more
+            // importantly, survive a sudden filesystem shutdown when the user
+            // pulls the power, each cycle dumps everything not yet written into
+            // a single file, so there is at most one file every 5 seconds.
             try {
                 while (true) {
-                    Collection<TagRead> tr = tagQueue.take();
-
-                    // Add all of the tags to our list
-                    tagList.addAll(tr);
-
-                    StringBuilder data = new StringBuilder();
-                    tr.forEach(read -> {
-                        data.append(read.toJSON()).append(System.lineSeparator());
-                    });
-
-                    // target file of <dbbapth>/YYYY/MM/DD/HH/HH-MM-ss.SSS.dat 
-                    File outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
-
-                    logger.debug("Writing to data to {}", outputFile.getAbsolutePath());
-
-                    // Make the parent path
-                    outputFile.getParentFile().mkdirs();
-
-                    try (FileWriter output = new FileWriter(outputFile);) {
-                        output.write(data.toString());
-                    } catch (IOException ex) {
-                        logger.error("Error writing to {}", outputFile.getAbsolutePath(), ex);
+                    List<TagRead> batch = new ArrayList<>();
+                    batch.add(pending.take()); // block while idle
+                    pending.drainTo(batch);
+                    try {
+                        writeFile(batch);
+                    } catch (RuntimeException ex) {
+                        logger.error("Error writing {} tag reads to the DB", batch.size(), ex);
                     }
-                    // Take a nap so that we don't write out a dozen files per second
-                    // This limits us to no more than one file every 5 seconds or so
+                    // Let the next batch build up for 5 seconds
                     Thread.sleep(5000);
                 }
             } catch (InterruptedException ex) {
@@ -215,12 +214,65 @@ public class TagDB {
     }
 
     public Collection<TagRead> getReads() {
-        return new ArrayList<>(tagList);
+        synchronized (tagList) {
+            return new ArrayList<>(tagList);
+        }
     }
 
+    /**
+     * Records processed reads: they are available from getReads() right away
+     * and are written to disk on the DB thread's next cycle (within 5 seconds).
+     * Never blocks.
+     */
     public void addReads(Collection<TagRead> reads) {
-        tagQueue.add(reads);
+        synchronized (tagList) {
+            tagList.addAll(reads);
+        }
+        pending.addAll(reads);
+    }
 
+    /**
+     * Writes any reads that are not yet on disk right now. Called at shutdown.
+     */
+    public void flush() {
+        List<TagRead> batch = new ArrayList<>();
+        pending.drainTo(batch);
+        if (!batch.isEmpty()) {
+            writeFile(batch);
+            logger.info("Flushed {} tag reads to the DB", batch.size());
+        }
+    }
+
+    // Writes the reads to a new file at <dbpath>/YYYY/MM/DD/HH/HH-mm-ss.SSS.dat
+    private void writeFile(List<TagRead> reads) {
+        StringBuilder data = new StringBuilder();
+        reads.forEach(read -> data.append(read.toJSON()).append(System.lineSeparator()));
+
+        synchronized (writeLock) {
+            File outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
+            // Two writes in the same millisecond (flush() racing the DB thread)
+            // must not overwrite each other
+            while (outputFile.exists()) {
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
+            }
+
+            logger.debug("Writing {} tag reads to {}", reads.size(), outputFile.getAbsolutePath());
+
+            // Make the parent path
+            outputFile.getParentFile().mkdirs();
+
+            try (FileWriter output = new FileWriter(outputFile)) {
+                output.write(data.toString());
+            } catch (IOException ex) {
+                logger.error("Error writing to {}", outputFile.getAbsolutePath(), ex);
+            }
+        }
     }
 
 }

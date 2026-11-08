@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,69 +85,92 @@ public class TagReadProcessor implements Runnable {
                 }
                 ReaderGatingStyle gatingStyle = ReaderGatingStyle.getStyle(pikaConfig.getKey("Reader").optString("Gating Style"));
                 
-                logger.debug("Waiting for tag reads.... Gating: {} Style: {}", gating, gatingStyle);
-                tags.add(tagQueue.take());
+                logger.trace("Waiting for tag reads.... Gating: {} Style: {}", gating, gatingStyle);
+                if (tagReadMap.isEmpty()) {
+                    // Nothing waiting on the gate, so block until a read arrives
+                    tags.add(tagQueue.take());
+                } else {
+                    // Reads are waiting on the gate. Don't block, or they would
+                    // not be released until some other tag is read.
+                    TagRead t = tagQueue.poll(100, TimeUnit.MILLISECONDS);
+                    if (t != null) {
+                        tags.add(t);
+                    }
+                }
 
                 
                 tagQueue.drainTo(tags);
 
-                logger.debug("Recieved {} raw tag reads to process", tags.size());
-                
-                // sort all of the new tags by the epochMilli for each read
-                tags.sort(null);
-
-                tags.forEach(t -> {
-                    if (!tagReadMap.containsKey(t.hexEPC)) {
-                        tagReadMap.put(t.hexEPC, new ArrayList<>());
+                // A bad read must never kill this thread, or every read
+                // after it would be lost
+                try {
+                    if (!tags.isEmpty()) {
+                        logger.debug("Recieved {} raw tag reads to process", tags.size());
                     }
-                    tagReadMap.get(t.hexEPC).add(t);
-                });
-                
-                
-                long gate = Instant.now().toEpochMilli() - gating;
-                
-                
-                Map<String, TagRead> tagMap = new HashMap<>(1000);
-                
-                for (String epc : new ArrayList<>(tagReadMap.keySet())) {
-                    // split the tags into a hash, saving the strongest read
-                    if (tagReadMap.get(epc).getFirst().epochMilli < gate) {
-                        tagReadMap.get(epc).forEach(t -> {
-                            // Save the strongest read for each EPC value
-                            String key = switch (gatingStyle) {
-                                case ANTENNA ->
-                                    t.hexEPC + t.getReaderID() + t.getReaderAntenna();
-                                case BOX ->
-                                    t.hexEPC;
-                                case READER ->
-                                    t.hexEPC + t.getReaderID();
-                                default ->
-                                    t.hexEPC;
-                            };
 
-                            if (tagMap.containsKey(key)) {
-                                if (tagMap.get(key).rssi.compareTo(t.rssi) < 0) {
-                                    tagMap.put(key, t);
-                                }
-                            } else {
-                                tagMap.put(key, t);
-                            }                    
-                        });
-                        tagReadMap.remove(epc);
+                    // sort all of the new tags by the epochMilli for each read
+                    tags.sort(null);
+
+                    tags.forEach(t -> {
+                        if (!tagReadMap.containsKey(t.hexEPC)) {
+                            tagReadMap.put(t.hexEPC, new ArrayList<>());
+                        }
+                        tagReadMap.get(t.hexEPC).add(t);
+                    });
+
+
+                    long gate = Instant.now().toEpochMilli() - gating;
+
+
+                    Map<String, TagRead> tagMap = new HashMap<>(1000);
+
+                    for (String epc : new ArrayList<>(tagReadMap.keySet())) {
+                        try {
+                            // split the tags into a hash, saving the strongest read
+                            if (tagReadMap.get(epc).getFirst().epochMilli < gate) {
+                                tagReadMap.remove(epc).forEach(t -> {
+                                    // Save the strongest read for each EPC value
+                                    String key = switch (gatingStyle) {
+                                        case ANTENNA ->
+                                            t.hexEPC + t.getReaderID() + t.getReaderAntenna();
+                                        case BOX ->
+                                            t.hexEPC;
+                                        case READER ->
+                                            t.hexEPC + t.getReaderID();
+                                        default ->
+                                            t.hexEPC;
+                                    };
+
+                                    if (tagMap.containsKey(key)) {
+                                        if (tagMap.get(key).rssi.compareTo(t.rssi) < 0) {
+                                            tagMap.put(key, t);
+                                        }
+                                    } else {
+                                        tagMap.put(key, t);
+                                    }
+                                });
+                            }
+                        } catch (RuntimeException ex) {
+                            // Drop a bad read instead of failing on it every pass
+                            logger.error("Dropping the pending reads for EPC {}", epc, ex);
+                            tagReadMap.remove(epc);
+                        }
                     }
-                }
 
-                if (!tagMap.isEmpty()) {
-                    // For each read, post it to the handler
-                    tagRouter.routeTagReads(tagMap.values()); 
+                    if (!tagMap.isEmpty()) {
+                        // For each read, post it to the handler
+                        tagRouter.routeTagReads(tagMap.values()); 
 
-                    // Update some stats
-                    TagRead lastChipRead = tagMap.values().stream()
-                            .sorted((t1, t2) -> t1.epochMilli.compareTo(t2.epochMilli))
-                            .skip(tagMap.size() - 1).findFirst().get();
+                        // Update some stats
+                        TagRead lastChipRead = tagMap.values().stream()
+                                .sorted((t1, t2) -> t1.epochMilli.compareTo(t2.epochMilli))
+                                .skip(tagMap.size() - 1).findFirst().get();
 
-                    statusHandler.incrementReadCount(tagMap.size());
-                    statusHandler.lastChipRead(lastChipRead);
+                        statusHandler.incrementReadCount(tagMap.size());
+                        statusHandler.lastChipRead(lastChipRead);
+                    }
+                } catch (RuntimeException ex) {
+                    logger.error("Error processing {} raw tag reads", tags.size(), ex);
                 }
                 
                 Thread.sleep(100); // take a nap for a short bit
@@ -176,7 +200,10 @@ public class TagReadProcessor implements Runnable {
         }
 
         logger.trace("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);
-        tagQueue.add(tr);
+        // Never throw on the reader's IO thread, even if we are backed up
+        if (!tagQueue.offer(tr)) {
+            logger.warn("Tag read queue is full, dropping read of {} from reader {}", tr.getEPCDecimal(), tr.readerID);
+        }
 
         // Also ship all tag reads to the status handler for statistics
         statusHandler.postRead(tr);

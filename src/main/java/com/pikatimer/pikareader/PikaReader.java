@@ -88,6 +88,9 @@ public class PikaReader {
             logger.info("Shutdown signal received. Stopping Readers...");
             readerHandler.stopReading();
 
+            // Write out any reads still waiting for the DB thread's next cycle
+            tagDB.flush();
+
             logger.info("Stopping Jetty");
             httpHandler.stopHTTPD();
 
