@@ -3,8 +3,7 @@
 ## v1.0 Cleanup / Bug Fixes
 - R700: validate on hardware (Octane 6.x support and R700 profile defaults are in place)
     - Region detection from the reader, and that the profile modes (4/5/2, and static modes 141, 288, 380) are accepted
-- Adaptive gating where the gating number is a minimum seen time, not max
-    - Posts the maximum read when when RSSI starts to increase or chip no longer seen after <gating> seconds
+- Validate the side-panel RSSI peak read filter on hardware at finish and split panels (6 dB drop held 1 s, 3-read average, 3 s unseen, 15 s max): walkers and runners should give one read each, timed near the closest approach
 - Reader profiles (Start Mats, Start Panels, Finish Mats, Finish Panels, Split Side Panels) are in place. Validate on hardware:
     - R420 outside FCC: confirm which Max Miller mode (4 or 5) the reader accepts
     - Zebra: confirm the reader keeps the MotoAntennaConfig A/B flip settings (logged after ADD_ROSPEC) and that bibs are read repeatedly with it

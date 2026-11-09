@@ -19,7 +19,7 @@ This allows for remote and offline readers for on-course splits or remote starti
 * Ability to store and "rewind" tag reads for later retrieval by the timing application.
 * Live streaming of tag reads via a websocket to a timing application or the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app.
 * Per-antenna read stats via status api and real time web display.
-* User configurable gating to reduce the number of tags transmitted to the timing application.
+* Per-profile read filters to reduce the number of tag reads transmitted to the timing application.
 * Debug log available via built in http server.
 * Antenna Status Display via web UI.
 * Support for both Decimal and Hex encoded tags.
@@ -89,6 +89,17 @@ A profile optimizes the reader configuration for a particular situation (start, 
 | Finish Panels (`finish_side_panels`) | Side panels at the finish. A backup to the mats; catches tags shadowed by bodies. | 32 |
 | Split Side Panels (`split_side_panels`) | On-course split with side panels only, which must read the full road width. | 16 |
 
+The profile also picks the read filter: how the raw reads of each tag are boiled down to the reads sent to the timing application. Each filter sends the strongest (highest RSSI) read it saw.
+
+| Profile | Reads sent |
+| --- | --- |
+| Start Mats | The strongest read in each 1 second window, so a runner standing on the mats is reported once a second. |
+| Start Panels | The strongest read in each 3 second window, so a crowd in view doesn't flood the timing application. |
+| Finish Mats | The strongest read in each 2 second window. Change it with `"Finish Mats Gating"` (seconds) in the `Reader` section. |
+| Finish Panels, Split Side Panels | One read per pass. The tag is watched while its RSSI rises, and its strongest read is sent once the RSSI (the average of the last 3 reads on the antenna that saw it strongest) has stayed 6 dB below its peak for 1 second, or the tag hasn't been seen for 3 seconds, or 15 seconds after its first read (a runner standing next to the panel). After that the tag is ignored until it has been out of view for 3 seconds. |
+
+A window opens on a tag's first read and closes when its time is up; the next read opens a new one. `Gating Style` sets what counts as one tag: `READER` (default) is the chip on each reader, `BOX` the chip on all readers together, and `ANTENNA` the chip on each reader antenna.
+
 What a profile sets on each kind of reader:
 - **Impinj Speedway** (R420 and R220, and any Impinj reader other than the R700 Series): reader mode `MaxMiller` (4), or 5 if the reader rejects 4 (as some non-FCC readers do), or `DenseReaderM4` (2) on readers without Max Miller, such as the R220. Start Panels uses `DenseReaderM4` (2). Search mode `DualTargetBtoASelect`.
 - **Impinj R700 Series** (R700 and R720): the reader mode for the reader's region. In FCC: 4 for mats, R700 mode 141 for finish panels and splits, 2 for start panels. In ETSI LB, Japan and other non-FCC regions: 5 for mats, 2 for panels. In ETSI HB: 4 for mats, 2 for panels. Search mode `DualTargetBtoASelect`.
@@ -105,13 +116,15 @@ Profile settings go in the `Reader` section of the config file:
 "Reader": {
   "Profile": "finish_mats",
   "Region": "Auto",
-  "Gating": 3,
   "Gating Style": "READER",
+  "Finish Mats Gating": 2,
   "Readers": [ ... ]
 }
 ```
 
 - `Profile`: the selected profile, by id or name. Saved whenever the profile is changed. Missing or unknown defaults to `finish_mats`.
+- `Gating Style`: `READER` (default), `BOX` or `ANTENNA`. See the read filters above.
+- `Finish Mats Gating`: optional, the Finish Mats read window in seconds (default 2). The old `Gating` setting is no longer used; PikaReader logs a warning if it's still there.
 - `Region`: `Auto` (default) uses the region each reader reports. Or set one of `fcc`, `global_other` (non-FCC regions in 902-928 MHz, such as Australia), `etsi_lb` (865-868 MHz), `etsi_hb` (915-921 MHz) or `japan`. Only the R700's reader modes depend on the region. If PikaReader can't tell an R700's region, or the reader reports a different region than the one set here, the R700 uses its own default reader mode and an error is logged.
 
 Each reader can override any profile's settings in its own `Profiles` entry. Anything not overridden uses the profile's default for that reader model and region. Profiles can be named by id or by name:

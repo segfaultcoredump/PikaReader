@@ -23,6 +23,7 @@ import com.pikatimer.pikareader.readers.profiles.ProfileManager;
 import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.status.Status;
 import com.pikatimer.pikareader.status.StatusHandler;
+import com.pikatimer.pikareader.tags.ReadFilterSettings;
 import com.pikatimer.pikareader.tags.TagDB;
 import com.pikatimer.pikareader.tags.TagRead;
 import com.pikatimer.pikareader.tags.TagReadRouter;
@@ -234,7 +235,9 @@ public class HTTPHandler {
                 JSONObject response = new JSONObject();
                 response.put("current", profiles.getCurrent().id());
                 JSONArray list = new JSONArray();
-                profiles.getProfiles().forEach(p -> list.put(p.toJSON()));
+                JSONObject readerConfig = PikaConfig.getInstance().getKey("Reader");
+                profiles.getProfiles().forEach(p -> list.put(p.toJSON()
+                        .put("readFilter", ReadFilterSettings.forProfile(p, readerConfig).summary())));
                 response.put("profiles", list);
                 ctx.json(response.toString());
             });
@@ -285,7 +288,9 @@ public class HTTPHandler {
 
     private JSONObject currentProfile() {
         ReaderHandler readerHandler = ReaderHandler.getInstance();
-        JSONObject response = ProfileManager.getInstance().getCurrent().toJSON();
+        ReaderProfile profile = ProfileManager.getInstance().getCurrent();
+        JSONObject response = profile.toJSON();
+        response.put("readFilter", ReadFilterSettings.forProfile(profile, PikaConfig.getInstance().getKey("Reader")).summary());
         response.put("reading", readerHandler.isReading());
         JSONArray readers = new JSONArray();
         readerHandler.getReaders().stream().sorted(Comparator.comparing(RFIDReader::getID)).forEach(r -> {

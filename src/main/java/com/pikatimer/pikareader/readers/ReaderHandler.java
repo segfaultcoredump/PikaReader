@@ -20,6 +20,7 @@ import com.pikatimer.pikareader.conf.PikaConfig;
 import com.pikatimer.pikareader.readers.profiles.ProfileManager;
 import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.status.StatusHandler;
+import com.pikatimer.pikareader.tags.ReadFilterSettings;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -87,8 +88,7 @@ public class ReaderHandler {
 
         // if we have an empty config, build out the defaults
         if (readerConfig.isEmpty()) {
-            readerConfig.put("Gating", 3); // Default Gating of 3 seconds
-            readerConfig.put("Gating Style", ReaderGatingStyle.READER);
+            readerConfig.put("Gating Style", ReaderGatingStyle.READER.getStyle());
             JSONArray defaultReaders = new JSONArray();
             JSONObject defaultReader = new JSONObject();
             defaultReader.put("Index", 1);
@@ -101,6 +101,14 @@ public class ReaderHandler {
 
             pikaConfig.putObject("Reader", readerConfig);
         }
+
+        // Each profile now sets its own read filter
+        if (readerConfig.has("Gating")) {
+            logger.warn("\"Gating\" in the \"Reader\" config is no longer used: each reader profile sets its own read filter. "
+                    + "To change the Finish Mats window, set \"{}\" (seconds) instead.", ReadFilterSettings.FINISH_MATS_GATING);
+        }
+        ReaderProfile profile = ProfileManager.getInstance().getCurrent();
+        logger.info("Read filter for the {} profile: {}", profile, ReadFilterSettings.forProfile(profile, readerConfig).summary());
 
         // Find the readers we can set up
         Set<Integer> seenIndexes = new HashSet<>();

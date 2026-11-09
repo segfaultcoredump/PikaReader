@@ -18,14 +18,15 @@ package com.pikatimer.pikareader.tags;
 
 import com.pikatimer.pikareader.conf.PikaConfig;
 import com.pikatimer.pikareader.readers.ReaderGatingStyle;
+import com.pikatimer.pikareader.readers.profiles.ProfileManager;
+import com.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import com.pikatimer.pikareader.status.StatusHandler;
 import java.awt.Toolkit;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -51,7 +52,6 @@ public class TagReadProcessor implements Runnable {
 
     // processTagRead() is called concurrently from every reader's IO thread
     Map<String, TagRead> seenTags = new ConcurrentHashMap<>();
-    Integer defaultGating = 3000;
 
     private volatile Thread tagProcessingThread;
 
@@ -72,25 +72,38 @@ public class TagReadProcessor implements Runnable {
 
     @Override
     public void run() {
-        Map<String,List<TagRead>> tagReadMap = new HashMap<>(1000);
+        ProfileManager profiles = ProfileManager.getInstance();
+        ReaderProfile profile = null;
+        ReaderGatingStyle gatingStyle = null;
+        ReadFilter filter = null;
 
         try {
             while (true) {
-                                
+
+                // The reader profile picks the read filter. The profile can
+                // only change while the readers are stopped, so when it does,
+                // send whatever the old filter still holds and switch.
+                ReaderProfile currentProfile = profiles.getCurrent();
+                ReaderGatingStyle currentStyle = ReaderGatingStyle.getStyle(pikaConfig.getKey("Reader").optString("Gating Style"));
+                if (filter == null || !currentProfile.equals(profile) || currentStyle != gatingStyle) {
+                    if (filter != null) {
+                        routeReads(filter.flush());
+                    }
+                    ReadFilterSettings settings = ReadFilterSettings.forProfile(currentProfile, pikaConfig.getKey("Reader"));
+                    filter = ReadFilter.create(settings, currentStyle);
+                    profile = currentProfile;
+                    gatingStyle = currentStyle;
+                    logger.info("Read filter for the {} profile: {}. Gating Style: {}", profile, settings.summary(), gatingStyle);
+                }
+
                 List<TagRead> tags = new ArrayList<>();
 
-                Integer gating = pikaConfig.getKey("Reader").optIntegerObject("Gating") * 1000;
-                if (gating.equals(0)) {
-                    gating = defaultGating;
-                }
-                ReaderGatingStyle gatingStyle = ReaderGatingStyle.getStyle(pikaConfig.getKey("Reader").optString("Gating Style"));
-                
-                logger.trace("Waiting for tag reads.... Gating: {} Style: {}", gating, gatingStyle);
-                if (tagReadMap.isEmpty()) {
-                    // Nothing waiting on the gate, so block until a read arrives
+                logger.trace("Waiting for tag reads....");
+                if (filter.isIdle()) {
+                    // Nothing waiting on a timer, so block until a read arrives
                     tags.add(tagQueue.take());
                 } else {
-                    // Reads are waiting on the gate. Don't block, or they would
+                    // Reads are waiting on a timer. Don't block, or they would
                     // not be released until some other tag is read.
                     TagRead t = tagQueue.poll(100, TimeUnit.MILLISECONDS);
                     if (t != null) {
@@ -98,8 +111,8 @@ public class TagReadProcessor implements Runnable {
                     }
                 }
 
-                
                 tagQueue.drainTo(tags);
+                long now = System.currentTimeMillis();
 
                 // A bad read must never kill this thread, or every read
                 // after it would be lost
@@ -108,77 +121,42 @@ public class TagReadProcessor implements Runnable {
                         logger.debug("Recieved {} raw tag reads to process", tags.size());
                     }
 
-                    // sort all of the new tags by the epochMilli for each read
+                    // sort all of the new tags by their timestamp
                     tags.sort(null);
 
-                    tags.forEach(t -> {
-                        if (!tagReadMap.containsKey(t.hexEPC)) {
-                            tagReadMap.put(t.hexEPC, new ArrayList<>());
-                        }
-                        tagReadMap.get(t.hexEPC).add(t);
-                    });
-
-
-                    long gate = Instant.now().toEpochMilli() - gating;
-
-
-                    Map<String, TagRead> tagMap = new HashMap<>(1000);
-
-                    for (String epc : new ArrayList<>(tagReadMap.keySet())) {
+                    for (TagRead t : tags) {
                         try {
-                            // split the tags into a hash, saving the strongest read
-                            if (tagReadMap.get(epc).getFirst().epochMilli < gate) {
-                                tagReadMap.remove(epc).forEach(t -> {
-                                    // Save the strongest read for each EPC value
-                                    String key = switch (gatingStyle) {
-                                        case ANTENNA ->
-                                            t.hexEPC + t.getReaderID() + t.getReaderAntenna();
-                                        case BOX ->
-                                            t.hexEPC;
-                                        case READER ->
-                                            t.hexEPC + t.getReaderID();
-                                        default ->
-                                            t.hexEPC;
-                                    };
-
-                                    if (tagMap.containsKey(key)) {
-                                        if (tagMap.get(key).rssi.compareTo(t.rssi) < 0) {
-                                            tagMap.put(key, t);
-                                        }
-                                    } else {
-                                        tagMap.put(key, t);
-                                    }
-                                });
-                            }
+                            filter.add(t, now);
                         } catch (RuntimeException ex) {
-                            // Drop a bad read instead of failing on it every pass
-                            logger.error("Dropping the pending reads for EPC {}", epc, ex);
-                            tagReadMap.remove(epc);
+                            logger.error("Dropping a bad tag read of {}", t.hexEPC, ex);
                         }
                     }
 
-                    if (!tagMap.isEmpty()) {
-                        // For each read, post it to the handler
-                        tagRouter.routeTagReads(tagMap.values()); 
-
-                        // Update some stats
-                        TagRead lastChipRead = tagMap.values().stream()
-                                .sorted((t1, t2) -> t1.epochMilli.compareTo(t2.epochMilli))
-                                .skip(tagMap.size() - 1).findFirst().get();
-
-                        statusHandler.incrementReadCount(tagMap.size());
-                        statusHandler.lastChipRead(lastChipRead);
-                    }
+                    routeReads(filter.ready(now));
                 } catch (RuntimeException ex) {
                     logger.error("Error processing {} raw tag reads", tags.size(), ex);
                 }
-                
+
                 Thread.sleep(100); // take a nap for a short bit
 
             }
         } catch (InterruptedException ex) {
             logger.info("Exiting " + tagProcessingThread.getName());
         }
+    }
+
+    // Send the cooked reads on and update the stats
+    private void routeReads(List<TagRead> reads) {
+        if (reads.isEmpty()) {
+            return;
+        }
+        tagRouter.routeTagReads(reads);
+
+        TagRead lastChipRead = reads.stream()
+                .max(Comparator.comparing(TagRead::getEpochMilli, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .get();
+        statusHandler.incrementReadCount(reads.size());
+        statusHandler.lastChipRead(lastChipRead);
     }
 
     public void processTagRead(TagRead tr) {

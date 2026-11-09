@@ -16,10 +16,6 @@
  */
 package com.pikatimer.pikareader.readers;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  *
  * @author John Garner <segfaultcoredump@gmail.com>
@@ -32,24 +28,21 @@ public enum ReaderGatingStyle {
 
     private final String style;
 
-    private static final Map<String, ReaderGatingStyle> styleMap = createMap();
-
     ReaderGatingStyle(String s) {
         style = s;
     }
 
-    private static Map<String, ReaderGatingStyle> createMap() {
-        Map<String, ReaderGatingStyle> map = new HashMap<>();
-
-        for (ReaderGatingStyle l : ReaderGatingStyle.values()) {
-            map.put(l.getStyle(),l);
-        }
-
-        return Collections.unmodifiableMap(map);
-    }
-    
+    /**
+     * @param s the style, in any case: "Box", "BOX" or "box"
+     * @return the style, or READER if it isn't one
+     */
     public static ReaderGatingStyle getStyle(String s){
-        return styleMap.getOrDefault(s, READER);
+        for (ReaderGatingStyle g : values()) {
+            if (g.style.equalsIgnoreCase(s)) {
+                return g;
+            }
+        }
+        return READER;
     }
 
     public String getStyle() {

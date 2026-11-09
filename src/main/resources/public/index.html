@@ -329,7 +329,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                 var option = document.createElement("option");
                                 option.value = p.id;
                                 option.textContent = p.name;
-                                option.title = p.description;
+                                option.title = p.readFilter ? p.description + "\nRead filter: " + p.readFilter : p.description;
                                 profileSelect.appendChild(option);
                             });
                             if (pendingProfile === null) {
