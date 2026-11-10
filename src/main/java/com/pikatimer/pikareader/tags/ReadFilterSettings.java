@@ -42,10 +42,12 @@ import org.slf4j.LoggerFactory;
  * long, and ignore it after a report until it has not been seen for this long
  * @param maxHoldMs RSSI_PEAK: report a tag that is still in view this long
  * after its first read
+ * @param repeatMs RSSI_PEAK: after a report, report a tag that is still in
+ * view again this often, and never report a tag more often than this
  *
  * @author John Garner <segfaultcoredump@gmail.com>
  */
-public record ReadFilterSettings(Type type, long windowMs, double dropDb, int smoothingReads, long dropHoldMs, long lostMs, long maxHoldMs) {
+public record ReadFilterSettings(Type type, long windowMs, double dropDb, int smoothingReads, long dropHoldMs, long lostMs, long maxHoldMs, long repeatMs) {
 
     public enum Type {
         /**
@@ -55,7 +57,8 @@ public record ReadFilterSettings(Type type, long windowMs, double dropDb, int sm
         WINDOW,
         /**
          * Follow the RSSI while it rises and report the strongest read once
-         * it has fallen off, or the tag is gone.
+         * it has fallen off, or the tag is gone. A tag that stays in view is
+         * reported again every repeatMs.
          */
         RSSI_PEAK
     }
@@ -88,16 +91,19 @@ public record ReadFilterSettings(Type type, long windowMs, double dropDb, int sm
     // A tag that stays in view with a flat RSSI (a finisher standing in the
     // chute) never drops off, so report it after this long
     static final long PEAK_MAX_HOLD_MS = 15000;
+    // ...and again this often while it stays (and never more often, even
+    // when a tag drops out of view for a few seconds and comes back)
+    static final long PEAK_REPEAT_MS = 15000;
 
     // Config problems already warned about, so a bad value is logged once
     private static final Set<String> warned = ConcurrentHashMap.newKeySet();
 
     public static ReadFilterSettings window(long windowMs) {
-        return new ReadFilterSettings(Type.WINDOW, windowMs, 0, 0, 0, 0, 0);
+        return new ReadFilterSettings(Type.WINDOW, windowMs, 0, 0, 0, 0, 0, 0);
     }
 
-    public static ReadFilterSettings rssiPeak(double dropDb, int smoothingReads, long dropHoldMs, long lostMs, long maxHoldMs) {
-        return new ReadFilterSettings(Type.RSSI_PEAK, 0, dropDb, smoothingReads, dropHoldMs, lostMs, maxHoldMs);
+    public static ReadFilterSettings rssiPeak(double dropDb, int smoothingReads, long dropHoldMs, long lostMs, long maxHoldMs, long repeatMs) {
+        return new ReadFilterSettings(Type.RSSI_PEAK, 0, dropDb, smoothingReads, dropHoldMs, lostMs, maxHoldMs, repeatMs);
     }
 
     /**
@@ -115,7 +121,7 @@ public record ReadFilterSettings(Type type, long windowMs, double dropDb, int sm
             case "finish_mats" ->
                 window(finishMatsWindow(readerConfig));
             case "finish_side_panels", "split_side_panels" ->
-                rssiPeak(PEAK_DROP_DB, PEAK_SMOOTHING_READS, PEAK_DROP_HOLD_MS, PEAK_LOST_MS, PEAK_MAX_HOLD_MS);
+                rssiPeak(PEAK_DROP_DB, PEAK_SMOOTHING_READS, PEAK_DROP_HOLD_MS, PEAK_LOST_MS, PEAK_MAX_HOLD_MS, PEAK_REPEAT_MS);
             default -> {
                 if (warned.add("profile:" + profile.id())) {
                     logger.warn("No read filter is defined for the {} profile. Using the strongest read every {}", profile, seconds(FINISH_MATS_WINDOW_MS));
@@ -152,7 +158,8 @@ public record ReadFilterSettings(Type type, long windowMs, double dropDb, int sm
                 "Strongest read once the RSSI (" + smoothingReads + "-read average) has stayed "
                 + BigDecimal.valueOf(dropDb).stripTrailingZeros().toPlainString() + " dB below its peak for "
                 + seconds(dropHoldMs) + ", the tag is unseen for " + seconds(lostMs)
-                + ", or " + seconds(maxHoldMs) + " after its first read";
+                + ", or " + seconds(maxHoldMs) + " after its first read, then every "
+                + seconds(repeatMs) + " while it stays in view";
         };
     }
 

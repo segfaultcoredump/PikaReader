@@ -33,7 +33,6 @@ This allows for remote and offline readers for on-course splits or remote starti
 * Integration with PikaTimer application 
 * Integration with PikaRelay for remote retrieval of data
 * Support for UART based readers (TSL and ThingMagic/Jadak )
-* Support for generic LLRP Readers
 * Web Based configuration tool
 
 ## Screen Snapshots
@@ -96,9 +95,9 @@ The profile also picks the read filter: how the raw reads of each tag are boiled
 | Start Mats | The strongest read in each 1 second window, so a runner standing on the mats is reported once a second. |
 | Start Panels | The strongest read in each 3 second window, so a crowd in view doesn't flood the timing application. |
 | Finish Mats | The strongest read in each 2 second window. Change it with `"Finish Mats Gating"` (seconds) in the `Reader` section. |
-| Finish Panels, Split Side Panels | One read per pass. The tag is watched while its RSSI rises, and its strongest read is sent once the RSSI (the average of the last 3 reads on the antenna that saw it strongest) has stayed 6 dB below its peak for 1 second, or the tag hasn't been seen for 3 seconds, or 15 seconds after its first read (a runner standing next to the panel). After that the tag is ignored until it has been out of view for 3 seconds. |
+| Finish Panels, Split Side Panels | One read per pass, and never more than one every 15 seconds. The tag is watched while its RSSI rises, and its strongest read is sent once the RSSI (the average of the last 3 reads on the antenna that saw it strongest) has stayed 6 dB below its peak for 1 second, or the tag hasn't been seen for 3 seconds, or 15 seconds after its first read (a runner standing next to the panel). The tag's reads for the next 15 seconds are ignored. If it is still in view after that, it is sent again, and so on every 15 seconds. Once it has been out of view for 3 seconds (and 15 seconds have passed since it was sent), its next read starts a new pass. |
 
-A window opens on a tag's first read and closes when its time is up; the next read opens a new one. `Gating Style` sets what counts as one tag: `READER` (default) is the chip on each reader, `BOX` the chip on all readers together, and `ANTENNA` the chip on each reader antenna.
+A window opens on a tag's first read and closes when its time is up. While the tag stays in view the windows follow back to back, so a tag standing on the mats is sent exactly once per window (60 reads a minute on Start Mats, 30 on Finish Mats, 20 on Start Panels). Once a whole window passes without a read, the tag's next read opens a new window. `Gating Style` sets what counts as one tag: `READER` (default) is the chip on each reader, `BOX` the chip on all readers together, and `ANTENNA` the chip on each reader antenna.
 
 For the gory details (what each profile sets on the Impinj and Zebra readers, how sessions are assigned, the profile settings in the config file and per-reader overrides, plus the setup and config options for each Impinj and Zebra / Motorola FX reader), see [Gory Details](Gory%20Details.md).
 

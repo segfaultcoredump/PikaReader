@@ -22,6 +22,9 @@ import com.pikatimer.pikareader.readers.ReaderHandler;
 import com.pikatimer.pikareader.status.StatusHandler;
 import com.pikatimer.pikareader.tags.TagDB;
 import com.pikatimer.pikareader.util.DiscoveryListener;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +42,22 @@ public class PikaReader {
         PikaReader pr = new PikaReader();
         pr.start();
 
+    }
+
+    /**
+     * The version and build time, from pikareader-build.properties (filled in
+     * by Maven at build time).
+     */
+    static String buildInfo() {
+        Properties p = new Properties();
+        try (InputStream in = PikaReader.class.getResourceAsStream("/pikareader-build.properties")) {
+            if (in != null) {
+                p.load(in);
+            }
+        } catch (IOException ex) {
+            logger.debug("Unable to read pikareader-build.properties", ex);
+        }
+        return p.getProperty("version", "unknown") + " (built " + p.getProperty("built", "unknown") + ")";
     }
 
     public void start() {
@@ -59,6 +78,9 @@ public class PikaReader {
                                       Released under the GPL-3.0 license.
                                                                                        
                                                                                                                    """);
+        // Log which build is running, so a stale install is easy to spot
+        logger.info("PikaReader {}", buildInfo());
+
         // Read Config
         PikaConfig pikaConfig = PikaConfig.getInstance();
 

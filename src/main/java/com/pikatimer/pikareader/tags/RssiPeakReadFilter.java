@@ -41,9 +41,18 @@ import org.slf4j.LoggerFactory;
  * panels on opposite sides of the road) see the same tag at very different
  * levels. The leading antenna is the one with the highest averaged peak.
  *
- * After a report the tag's reads are ignored until it has not been seen for
- * lostMs, so the tail of a pass, or a finisher standing in the chute, doesn't
- * produce more reads. The next pass (e.g. the next lap) starts over.
+ * After a report a tag is reported at most once every repeatMs:
+ * <ul>
+ * <li>its reads for repeatMs after the report are ignored, so the tail of a
+ * pass doesn't produce more reads;</li>
+ * <li>a tag still in view after that (a finisher standing in the chute, a bib
+ * left next to the panel) is reported again with its first reads, and so on
+ * every repeatMs;</li>
+ * <li>the next pass (e.g. the next lap) starts over once the tag has been out
+ * of view for lostMs and repeatMs have passed since the last report, so a tag
+ * that keeps dropping out of view for a few seconds isn't reported on every
+ * return.</li>
+ * </ul>
  *
  * @author John Garner <segfaultcoredump@gmail.com>
  */
@@ -105,7 +114,11 @@ final class RssiPeakReadFilter implements ReadFilter {
         final long firstSeen;
         long lastSeen;
         TagRead best;
-        boolean done;
+        // When the tag was last reported, or -1 while this pass hasn't been
+        long reportedAt = -1;
+        // Once repeatMs have passed since the last report: the strongest
+        // read, sent by the next ready(). Null otherwise.
+        TagRead since;
         final Map<String, AntennaTrend> antennas = new HashMap<>();
 
         Track(long now, TagRead first) {
@@ -124,8 +137,10 @@ final class RssiPeakReadFilter implements ReadFilter {
     public void add(TagRead read, long now) {
         String key = ReadFilter.key(read, style);
         Track t = tracks.get(key);
-        if (t != null && t.done && now - t.lastSeen > settings.lostMs()) {
-            // Reported and then gone long enough: this is a new pass
+        if (t != null && t.reportedAt >= 0 && now - t.lastSeen > settings.lostMs()
+                && now - t.reportedAt >= settings.repeatMs()) {
+            // Reported, then out of view, and not reported too recently:
+            // this is a new pass
             t = null;
         }
         if (t == null) {
@@ -133,8 +148,13 @@ final class RssiPeakReadFilter implements ReadFilter {
             tracks.put(key, t);
         }
         t.lastSeen = now;
-        if (t.done) {
-            // Already reported. Ignore the tail of the pass.
+        if (t.reportedAt >= 0) {
+            // Already reported. Ignore the tail of the pass, but once
+            // repeatMs have passed, a tag still in view is reported again.
+            if (now - t.reportedAt >= settings.repeatMs()
+                    && (t.since == null || ReadFilter.rssi(read) > ReadFilter.rssi(t.since))) {
+                t.since = read;
+            }
             return;
         }
 
@@ -156,12 +176,13 @@ final class RssiPeakReadFilter implements ReadFilter {
             Map.Entry<String, Track> e = it.next();
             Track t = e.getValue();
             try {
-                if (t.done) {
-                    if (now - t.lastSeen > settings.lostMs()) {
-                        it.remove();
-                    }
-                } else {
+                if (t.reportedAt < 0) {
                     check(e.getKey(), t, now);
+                } else if (t.since != null) {
+                    report(e.getKey(), t, t.since, "still in view", now);
+                } else if (now - t.lastSeen > settings.lostMs() && now - t.reportedAt >= settings.repeatMs()) {
+                    // Gone: forget it
+                    it.remove();
                 }
             } catch (RuntimeException ex) {
                 logger.error("Dropping the pending reads for {}", e.getKey(), ex);
@@ -190,16 +211,27 @@ final class RssiPeakReadFilter implements ReadFilter {
             reason = "still in view";
         }
         if (reason != null) {
-            logger.debug("Reporting {} ({}): best {} dBm after {} ms", key, reason, ReadFilter.rssi(t.best), now - t.firstSeen);
-            out.add(t.best);
-            t.done = true;
+            report(key, t, t.best, reason, now);
         }
+    }
+
+    private void report(String key, Track t, TagRead read, String reason, long now) {
+        logger.debug("Reporting {} ({}): {} dBm, {} ms after its first read", key, reason, ReadFilter.rssi(read), now - t.firstSeen);
+        out.add(read);
+        t.reportedAt = now;
+        t.since = null;
     }
 
     @Override
     public List<TagRead> flush() {
         List<TagRead> reads = new ArrayList<>(out);
-        tracks.values().stream().filter(t -> !t.done).forEach(t -> reads.add(t.best));
+        tracks.values().forEach(t -> {
+            if (t.reportedAt < 0) {
+                reads.add(t.best);
+            } else if (t.since != null) {
+                reads.add(t.since);
+            }
+        });
         out.clear();
         tracks.clear();
         return reads;
@@ -207,8 +239,8 @@ final class RssiPeakReadFilter implements ReadFilter {
 
     @Override
     public boolean isIdle() {
-        // Reported tracks only need clearing out, which add() and ready() do
-        // whenever reads come in
-        return out.isEmpty() && tracks.values().stream().allMatch(t -> t.done);
+        // Reported tracks with no reads since only need clearing out, which
+        // add() and ready() do whenever reads come in
+        return out.isEmpty() && tracks.values().stream().allMatch(t -> t.reportedAt >= 0 && t.since == null);
     }
 }

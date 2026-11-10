@@ -3,7 +3,7 @@
 ## v1.0 Cleanup / Bug Fixes
 - R700: validate on hardware (Octane 6.x support and R700 profile defaults are in place)
     - Region detection from the reader, and that the profile modes (4/5/2, and static modes 141, 288, 380) are accepted
-- Validate the side-panel RSSI peak read filter on hardware at finish and split panels (6 dB drop held 1 s, 3-read average, 3 s unseen, 15 s max): walkers and runners should give one read each, timed near the closest approach
+- Validate the side-panel RSSI peak read filter on hardware at finish and split panels (6 dB drop held 1 s, 3-read average, 3 s unseen, 15 s max, then every 15 s while in view): walkers and runners should give one read each, timed near the closest approach
 - Reader profiles (Start Mats, Start Panels, Finish Mats, Finish Panels, Split Side Panels) are in place. Validate on hardware:
     - R420 outside FCC: confirm which Max Miller mode (4 or 5) the reader accepts
     - Zebra: confirm the reader keeps the MotoAntennaConfig A/B flip settings (logged after ADD_ROSPEC) and that bibs are read repeatedly with it
@@ -22,16 +22,15 @@
 ## v1.1 PikaRelay Support
 - Send reads to relay server
 - Rewind
-- Start / Stop Reader
+- Start Reader
 - Status updates
 
 ## v1.2 Web Config
-- Set gating
+- On-Disk Cleanup of old reads
 - Upload URL, enable/disable
-- Timezone override? 
 - Basic Reader config
     - Add/remove
-    - Set IP
+    - Set IP / port
     - Set Type
     - enable / disable antenna ports
     - set power level
@@ -39,6 +38,4 @@
 ## v1.3+ (or whenever)
 - Bug Fixes and general cleanup
 - Migrate to Jackson for json encoding and parsing
-- On-Disk Cleanup via web config
-
 - Add support for UART based readers

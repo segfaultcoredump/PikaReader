@@ -11,6 +11,9 @@
         <maven.compiler.target>21</maven.compiler.target>
         <exec.mainClass>com.pikatimer.pikareader.PikaReader</exec.mainClass>
         <maven.javadoc.skip>true</maven.javadoc.skip> 
+        <!-- Build time for pikareader-build.properties (UTC) -->
+        <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
+        <build.timestamp>${maven.build.timestamp}</build.timestamp>
     </properties>
     <dependencies>
         <!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-api -->
@@ -58,8 +61,24 @@
             <artifactId>auto-service-annotations</artifactId>
             <version>1.1.1</version>
         </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Only these files get ${...} filled in -->
+            <resource>
+                <directory>src/main/resources-filtered</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -77,6 +96,17 @@
                     <debug>false</debug>
                 </configuration>
             </plugin> 
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Keep test runs out of the real log (and its rotation) -->
+                        <PIKAREADER_LOG>${project.build.directory}/test-pikareader.log</PIKAREADER_LOG>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
