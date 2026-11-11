@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.pikatimer</groupId>
+    <groupId>org.pikatimer</groupId>
     <artifactId>PikaReader</artifactId>
     <version>1.0Beta1</version>
     <packaging>jar</packaging>
@@ -9,7 +9,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <exec.mainClass>com.pikatimer.pikareader.PikaReader</exec.mainClass>
+        <exec.mainClass>org.pikatimer.pikareader.PikaReader</exec.mainClass>
         <maven.javadoc.skip>true</maven.javadoc.skip> 
         <!-- Build time for pikareader-build.properties (UTC) -->
         <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
@@ -116,7 +116,7 @@
                         <manifest>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
-                            <mainClass>com.pikatimer.pikareader.PikaReader</mainClass>
+                            <mainClass>org.pikatimer.pikareader.PikaReader</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

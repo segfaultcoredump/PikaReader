@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-PikaReader is a Java 21 / Maven app (v0.7, GPL-3.0) that runs on a small SBC (e.g. Raspberry Pi) next to RFID readers (Impinj Speedway R220/R420 and R700/R720 via Octane SDK 6.0.0.0, Zebra FX7400/FX7500/FX9500/FX9600/FXR90 via raw LLRP). It gates and stores tag reads on disk, streams them over a websocket, and supports "rewind" so a timing app can re-download reads later.
+PikaReader is a Java 21 / Maven app (v1.0Beta1, GPL-3.0) that runs on a small SBC (e.g. Raspberry Pi) next to RFID readers (Impinj Speedway R220/R420 and R700/R720 via Octane SDK 6.0.0.0, Zebra FX7400/FX7500/FX9500/FX9600/FXR90 via raw LLRP). It gates and stores tag reads on disk, streams them over a websocket, and supports "rewind" so a timing app can re-download reads later.
 
 ## Commands
 
 - Build: `mvn package` (`mvn` isn't on PATH on the dev Mac; use NetBeans' `"/Applications/Apache NetBeans.app/Contents/Resources/netbeans/java/maven/bin/mvn"`, add `-o` to build offline) → `target/PikaReader-0.7.jar` plus a shaded `target/PikaReader-0.7-uber.jar` (shade plugin attaches classifier `uber`)
-- Run: `java -jar target/PikaReader-0.7-uber.jar` (or `mvn exec:java -Dexec.mainClass=com.pikatimer.pikareader.PikaReader`). Stop with Ctrl-C / SIGTERM / SIGHUP (a JVM shutdown hook in `PikaReader.start()` stops readers and HTTP).
+- Run: `java -jar target/PikaReader-1.Beta1-uber.jar` (or `mvn exec:java -Dexec.mainClass=org.pikatimer.pikareader.PikaReader`). Stop with Ctrl-C / SIGTERM / SIGHUP (a JVM shutdown hook in `PikaReader.start()` stops readers and HTTP).
 - Test: `mvn test` (JUnit 5). `ReadFilterTest` drives each profile's read filter the way `TagReadProcessor.run()` does and checks the reads sent per minute. Surefire points `PIKAREADER_LOG` at `target/test-pikareader.log` so tests don't rotate the real log. No lint configuration.
 - Startup logs `PikaReader <version> (built <UTC time>)` from `src/main/resources-filtered/pikareader-build.properties` (Maven-filtered; `src/main/resources` is not filtered). Check it when a device seems to run old code.
 - Config file: `~/.PikaReader.cfg` (JSON), override with `-DCONFIG=<path>`. Tag DB directory: `~/.PikaReader`, override with `-DDB=<path>`. A default config is generated on first run (default reader IP `192.0.2.10`); edit it and restart. Web UI/API listens on port 8080.
