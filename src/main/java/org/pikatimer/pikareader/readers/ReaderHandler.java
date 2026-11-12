@@ -55,6 +55,19 @@ public class ReaderHandler {
     private volatile Boolean isReading = false;
 
     /**
+     * "Reader" config key: true while the user wants the readers reading
+     * (/start), false after /stop. Saved so that a restart after a power
+     * loss or a crash goes back to reading.
+     */
+    public static final String READING_KEY = "Reading";
+
+    // How often to retry a reader that should be reading but isn't
+    private static final long START_RETRY_MS = 10000;
+
+    // Retries the readers that didn't start. Guarded by this.
+    private Thread startWatchdog;
+
+    /**
      * SingletonHolder is loaded on the first execution of
      * Singleton.getInstance() or the first access to SingletonHolder.INSTANCE,
      * not before.
@@ -181,13 +194,98 @@ public class ReaderHandler {
         } catch (InterruptedException ex) {
         }
         isReading = true;
+        saveReadingState(true);
         StatusHandler.getInstance().clearReadCount();
 
         logger.info("Readers Started");
 
+        watchStalledReaders();
+    }
+
+    /**
+     * Start reading if the readers were reading when PikaReader last stopped
+     * (power loss, crash, restart). Called once at startup.
+     */
+    public void resumeReading() {
+        if (readerConfig.optBoolean(READING_KEY, false)) {
+            logger.info("The readers were reading when PikaReader last stopped. Resuming reading.");
+            startReading();
+        }
     }
 
     public synchronized void stopReading() {
+        stopReaders();
+        saveReadingState(false);
+    }
+
+    /**
+     * Stop the readers for a shutdown, keeping the saved reading state so the
+     * next start resumes reading if the readers were reading.
+     */
+    public synchronized void shutdown() {
+        stopReaders();
+    }
+
+    private void saveReadingState(boolean reading) {
+        if (readerConfig.optBoolean(READING_KEY, false) != reading) {
+            readerConfig.put(READING_KEY, reading);
+            pikaConfig.putObject("Reader", readerConfig);
+        }
+    }
+
+    /**
+     * Keep trying to start any reader that should be reading but isn't, e.g.
+     * an Impinj reader that was still booting when PikaReader resumed reading
+     * after a power loss. Readers that resume reading on their own (Zebra)
+     * are left alone. Called with the lock held.
+     */
+    private void watchStalledReaders() {
+        if (startWatchdog != null && startWatchdog.isAlive()) {
+            return;
+        }
+        if (stalledReaders().isEmpty()) {
+            return;
+        }
+        startWatchdog = Thread.ofPlatform().daemon().name("ReaderStartWatchdog").start(() -> {
+            Set<Integer> warned = new HashSet<>();
+            try {
+                while (true) {
+                    Thread.sleep(START_RETRY_MS);
+                    synchronized (this) {
+                        if (!isReading) {
+                            return;
+                        }
+                        List<RFIDReader> stalled = stalledReaders();
+                        if (stalled.isEmpty()) {
+                            logger.info("All readers are reading");
+                            return;
+                        }
+                        for (RFIDReader r : stalled) {
+                            if (warned.add(r.getID())) {
+                                logger.warn("Reader {} is not reading. It will be started as soon as it is connected.", r.getID());
+                            }
+                            // Kicks off a connect attempt if it isn't connected
+                            r.isConnected();
+                            if ("Connected".equals(r.getStatus())) {
+                                logger.info("Reader {} is connected. Starting it.", r.getID());
+                                r.startReading();
+                            }
+                        }
+                    }
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException ex) {
+                logger.error("Reader start watchdog failed", ex);
+            }
+        });
+    }
+
+    private List<RFIDReader> stalledReaders() {
+        return readers.values().stream().filter(r -> !r.resumesReading() && !r.isReading()).toList();
+    }
+
+    private void stopReaders() {
         logger.info("Stopping Readers");
         CountDownLatch latch = new CountDownLatch(readers.size());
         readers.values().parallelStream().forEach(r -> {

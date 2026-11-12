@@ -18,12 +18,8 @@ package org.pikatimer.pikareader.util;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
-import org.pikatimer.pikareader.tags.TagRead;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  *
@@ -31,19 +27,20 @@ import java.util.concurrent.ConcurrentMap;
  */
 public class DebugLogHolder extends AppenderBase<ILoggingEvent> {
 
-    //public static final ConcurrentMap<Integer, ILoggingEvent> eventMap = new ConcurrentHashMap<>();
+    // Static: logback creates the appender, the web server reads the list
     private static final List<ILoggingEvent> eventList = new ArrayList<>();
-    //Integer eventCounter = 1;
 
     @Override
     protected void append(ILoggingEvent event) {
-        synchronized (this) {
+        synchronized (eventList) {
             eventList.add(event);
-            //eventMap.put(eventCounter++, event);
         }
     }
 
     public static List<ILoggingEvent> getEventList() {
-        return new ArrayList<ILoggingEvent>(eventList);
+        // Copy under the lock: the appender adds from any thread
+        synchronized (eventList) {
+            return new ArrayList<>(eventList);
+        }
     }
 }

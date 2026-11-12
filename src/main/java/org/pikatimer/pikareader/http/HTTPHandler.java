@@ -29,8 +29,15 @@ import org.pikatimer.pikareader.tags.TagRead;
 import org.pikatimer.pikareader.tags.TagReadRouter;
 import org.pikatimer.pikareader.util.DebugLogHolder;
 import io.javalin.Javalin;
+import io.javalin.http.ContentType;
+import io.javalin.http.Context;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -42,6 +49,10 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
+import org.eclipse.jetty.util.thread.QueuedThreadPool;
+import org.eclipse.jetty.websocket.api.StatusCode;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -62,8 +73,22 @@ public class HTTPHandler {
 
     private Thread javalinThread;
     private Javalin javalinApp;
-    private static final List<WsContext> eventWebSocketConnections = new ArrayList<>();
-    private static final List<WsContext> statusWebSocketConnections = new ArrayList<>();
+    // Jetty threads add and remove clients while the router and status
+    // threads send to them, so these must be safe to iterate concurrently
+    private static final List<WsContext> eventWebSocketConnections = new CopyOnWriteArrayList<>();
+    private static final List<WsContext> statusWebSocketConnections = new CopyOnWriteArrayList<>();
+
+    // How many messages may queue up for one websocket client before it is
+    // dropped as too slow. Several minutes of reads at a busy start, and at
+    // most a few MB. The client reconnects and rewinds.
+    private static final int MAX_OUTGOING_FRAMES = 10000;
+
+    // Web server threads. Websockets don't hold a thread, so a small pool is
+    // plenty and keeps the thread stacks down on a Pi. (Not virtual threads:
+    // on Java 21 a virtual thread blocked on a synchronized ReaderHandler
+    // method pins one of the few carrier threads.)
+    private static final int HTTP_MAX_THREADS = 32;
+    private static final int HTTP_MIN_THREADS = 4;
 
 //    ReaderHandler readerHandler = ReaderHandler.getInstance();
     private static class SingletonHolder {
@@ -92,6 +117,10 @@ public class HTTPHandler {
         javalinThread = new Thread(() -> {
             javalinApp = Javalin.create(config -> {
                 config.staticFiles.add("/public", Location.CLASSPATH);
+
+                QueuedThreadPool threadPool = new QueuedThreadPool(HTTP_MAX_THREADS, HTTP_MIN_THREADS, 60000);
+                threadPool.setName("JettyServerThreadPool");
+                config.jetty.threadPool = threadPool;
                 
                 config.jetty.modifyWebSocketServletFactory(factory -> {
                     // Set idle timeout to 15 seconds. 
@@ -105,6 +134,7 @@ public class HTTPHandler {
             javalinApp.ws("/events", ws -> {
                 ws.onConnect(ctx -> {
                     ctx.enableAutomaticPings();
+                    ctx.session.getRemote().setMaxOutgoingFrames(MAX_OUTGOING_FRAMES);
                     eventWebSocketConnections.add(ctx);
                     
                     logger.debug("/event Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
@@ -128,6 +158,7 @@ public class HTTPHandler {
                 ws.onConnect(ctx -> {
                     logger.debug("/status Websocket onConnect: {}",ctx.session.getRemoteAddress().toString());
                     ctx.enableAutomaticPings();
+                    ctx.session.getRemote().setMaxOutgoingFrames(MAX_OUTGOING_FRAMES);
                     statusWebSocketConnections.add(ctx);
                     
                     //stash the remote IP for later use if we need it
@@ -207,21 +238,17 @@ public class HTTPHandler {
             javalinApp.get("/rewind/{from}/{to}", ctx -> {
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
                 LocalDateTime toTime = LocalDateTime.parse(ctx.pathParam("to"));
-                ctx.json(buildRewind(fromTime, toTime).toString());
+                writeReads(ctx, rewindReads(fromTime, toTime));
             });
 
             // Rewinds the data. "from" is in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
             javalinApp.get("/rewind/{from}", ctx -> {
                 LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
-                ctx.json(buildRewind(fromTime, null).toString());
+                writeReads(ctx, rewindReads(fromTime, null));
             });
 
             javalinApp.get("/rewind", ctx -> {
-                JSONArray data = new JSONArray();
-                TagDB.getInstance().getReads().stream().filter(Objects::nonNull).sorted().forEach(read -> {
-                    data.put(read.toJSONObject());
-                });
-                ctx.json(data.toString());
+                writeReads(ctx, TagDB.getInstance().getReads().stream().filter(Objects::nonNull).sorted().toList());
             });
 
             // TODO: Status Page
@@ -310,11 +337,13 @@ public class HTTPHandler {
     }
 
     public void sendTag(TagRead tr) {
-        eventWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
-            JSONObject read = tr.toJSONObject();
-            read.put("type", "READ");
-            ws.send(read.toString());
-        });
+        if (eventWebSocketConnections.isEmpty()) {
+            return;
+        }
+        JSONObject read = tr.toJSONObject();
+        read.put("type", "READ");
+        String message = read.toString();
+        eventWebSocketConnections.forEach(ws -> send(ws, message));
     }
 
     public void sendTags(Collection<TagRead> reads) {
@@ -325,39 +354,80 @@ public class HTTPHandler {
 
     public void postStatus(JSONObject statusReport) {
         statusReport.put("type", "STATUS");
-        statusWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
-            ws.send(statusReport.toString());
-        });
-        eventWebSocketConnections.stream().filter(ctx -> ctx.session.isOpen()).forEach(ws -> {
-            ws.send(statusReport.toString());
+        if (statusWebSocketConnections.isEmpty() && eventWebSocketConnections.isEmpty()) {
+            return;
+        }
+        String message = statusReport.toString();
+        statusWebSocketConnections.forEach(ws -> send(ws, message));
+        eventWebSocketConnections.forEach(ws -> send(ws, message));
+    }
+
+    /**
+     * Queues a message for a websocket client without waiting for it to be
+     * sent, so one slow client can't hold up the reads for everyone else.
+     * Jetty sends each client's messages in order. A client whose backlog hits
+     * MAX_OUTGOING_FRAMES, or whose send fails, is dropped; it can reconnect
+     * and rewind.
+     */
+    private void send(WsContext ws, String message) {
+        if (!ws.session.isOpen()) {
+            return;
+        }
+        ws.session.getRemote().sendString(message, new WriteCallback() {
+            @Override
+            public void writeFailed(Throwable x) {
+                // Only the first failure for a client gets here with it
+                // still in a list, so it's logged and closed once
+                boolean removed = eventWebSocketConnections.remove(ws);
+                removed |= statusWebSocketConnections.remove(ws);
+                if (removed) {
+                    logger.warn("Dropping websocket client {}: unable to send to it ({})", (Object) ws.attribute("user-ip"), x.toString());
+                    try {
+                        ws.session.close(StatusCode.TRY_AGAIN_LATER, "Client too slow");
+                    } catch (RuntimeException ex) {
+                        logger.debug("Error closing websocket client {}", (Object) ws.attribute("user-ip"), ex);
+                    }
+                }
+            }
         });
     }
 
 
     /**
-     * Builds the rewind data for a time range. Today's reads come from memory;
-     * anything before the start of today is read from disk.
+     * The reads for a rewind. Today's reads come from memory; anything before
+     * the start of today is read from disk.
      *
      * @param fromTime start of range (exclusive)
      * @param toTime end of range (exclusive), or null for open-ended
      */
-    private JSONArray buildRewind(LocalDateTime fromTime, LocalDateTime toTime) {
-        JSONArray data = new JSONArray();
+    private List<TagRead> rewindReads(LocalDateTime fromTime, LocalDateTime toTime) {
+        List<TagRead> reads = new ArrayList<>();
         LocalDateTime todayStart = LocalDate.now().atStartOfDay();
 
         // Historical portion: anything before today
         if (fromTime.isBefore(todayStart)) {
             LocalDateTime histTo = (toTime == null || toTime.isAfter(todayStart)) ? todayStart : toTime;
-            TagDB.getInstance().getReadsBetween(fromTime, histTo).forEach(read -> data.put(read.toJSONObject()));
+            reads.addAll(TagDB.getInstance().getReadsBetween(fromTime, histTo));
         }
 
         // Today's portion: from memory
         TagDB.getInstance().getReads().stream().filter(Objects::nonNull).sorted().forEach(read -> {
             LocalDateTime ts = read.getTimestamp();
             if (!ts.isBefore(todayStart) && fromTime.isBefore(ts) && (toTime == null || toTime.isAfter(ts))) {
-                data.put(read.toJSONObject());
+                reads.add(read);
             }
         });
-        return data;
+        return reads;
+    }
+
+    /**
+     * Streams the reads to the client as a JSON array, one read at a time,
+     * instead of building the whole array in memory first.
+     */
+    private static void writeReads(Context ctx, List<TagRead> reads) throws IOException {
+        ctx.contentType(ContentType.APPLICATION_JSON);
+        Writer out = new BufferedWriter(new OutputStreamWriter(ctx.outputStream(), StandardCharsets.UTF_8));
+        TagRead.writeJSONArray(reads, out);
+        out.flush();
     }
 }

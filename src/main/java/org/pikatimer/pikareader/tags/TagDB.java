@@ -18,10 +18,13 @@ package org.pikatimer.pikareader.tags;
 
 import org.pikatimer.pikareader.conf.PikaConfig;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -262,16 +265,40 @@ public class TagDB {
                 outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
             }
 
-            logger.debug("Writing {} tag reads to {}", reads.size(), outputFile.getAbsolutePath());
+            logger.trace("Writing {} tag reads to {}", reads.size(), outputFile.getAbsolutePath());
 
             // Make the parent path
-            outputFile.getParentFile().mkdirs();
+            File parent = outputFile.getParentFile();
+            boolean newDir = !parent.isDirectory();
+            parent.mkdirs();
 
-            try (FileWriter output = new FileWriter(outputFile)) {
-                output.write(data.toString());
+            // Force the data to the disk, not just the page cache, so the
+            // reads survive the power being pulled right after the write
+            try (FileOutputStream output = new FileOutputStream(outputFile)) {
+                output.write(data.toString().getBytes(StandardCharsets.UTF_8));
+                output.getFD().sync();
             } catch (IOException ex) {
                 logger.error("Error writing to {}", outputFile.getAbsolutePath(), ex);
             }
+
+            // The file's directory entry has to be on disk too, and a new
+            // hour directory needs its own entry in the day directory
+            syncDirectory(parent.toPath());
+            if (newDir) {
+                for (Path p = parent.toPath().getParent(); p != null && p.startsWith(dbPath); p = p.getParent()) {
+                    syncDirectory(p);
+                }
+            }
+        }
+    }
+
+    // fsync a directory. Works on Linux; some platforms can't open a
+    // directory for reading, which only costs the extra durability there.
+    private static void syncDirectory(Path dir) {
+        try (FileChannel channel = FileChannel.open(dir, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException ex) {
+            logger.trace("Unable to sync directory {}", dir, ex);
         }
     }
 

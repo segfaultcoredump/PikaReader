@@ -53,7 +53,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <logger name="org.eclipse" level="WARN" />
     <logger name="io.javalin" level="WARN" />
 
-    <logger name="org.pikatimer" level="debug" />
+    <!-- INFO keeps race-day logging off the SD card. For debug logging, copy
+         this file out of the jar, change the level and run with
+         -Dlogback.configurationFile=/path/to/logback.xml (scan="true" then
+         picks up later edits to that file without a restart). -->
+    <logger name="org.pikatimer" level="info" />
     
 </configuration>
 

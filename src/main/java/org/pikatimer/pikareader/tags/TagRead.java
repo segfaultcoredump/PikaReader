@@ -16,6 +16,8 @@
  */
 package org.pikatimer.pikareader.tags;
 
+import java.io.IOException;
+import java.io.Writer;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -41,14 +43,20 @@ public class TagRead implements Comparable<TagRead> {
 
     public void setEPC(String epc) {
         hexEPC = epc;
-        chip = getEPCDecimal(); // default
+        // The chip defaults to the EPC in decimal. It is worked out in
+        // getChip(), so the BigInteger conversion is only paid for the reads
+        // that are sent on, not for every raw read.
+        chip = null;
     }
 
     public String getEPC() {
         return hexEPC;
     }
-    
+
     public String getChip(){
+        if (chip == null && hexEPC != null) {
+            chip = getEPCDecimal();
+        }
         return chip;
     }
     
@@ -107,7 +115,7 @@ public class TagRead implements Comparable<TagRead> {
 
     public JSONObject toJSONObject() {
         JSONObject msg = new JSONObject();
-        msg.put("chip", chip);
+        msg.put("chip", getChip());
         msg.put("epc", getEPCHex());
         msg.put("timestamp", getTimestamp().format(formatter));
         msg.put("reader", readerID);
@@ -116,6 +124,24 @@ public class TagRead implements Comparable<TagRead> {
         msg.put("tz", tzOffset);
         msg.put("epochMilli",epochMilli);
         return msg;
+    }
+
+    /**
+     * Writes the reads as a JSON array, exactly as a JSONArray of
+     * toJSONObject() would print, one read at a time so the whole array is
+     * never held in memory.
+     */
+    public static void writeJSONArray(Iterable<TagRead> reads, Writer out) throws IOException {
+        out.write('[');
+        boolean first = true;
+        for (TagRead read : reads) {
+            if (!first) {
+                out.write(',');
+            }
+            first = false;
+            out.write(read.toJSON());
+        }
+        out.write(']');
     }
 
     public TagRead() {

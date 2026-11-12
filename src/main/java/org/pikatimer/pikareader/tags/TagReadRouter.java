@@ -113,7 +113,7 @@ public class TagReadRouter implements Runnable {
     public void routeTagReads(Collection<TagRead> tr) {
         logger.trace("Entering TagReadRouter::processTagReads");
 
-        logger.debug("TagRouter::processTagReads: Recieved {} new tags to process.", tr.size());
+        logger.trace("TagRouter::processTagReads: Recieved {} new tags to process.", tr.size());
         // Queue a copy so the caller can't change it once it's handed off
         tagQueue.add(new ArrayList<>(tr));
 

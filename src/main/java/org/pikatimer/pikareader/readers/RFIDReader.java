@@ -60,4 +60,13 @@ public interface RFIDReader {
     public default JSONObject getProfileSettings() {
         return new JSONObject();
     }
+
+    /**
+     * @return true if the reader goes back to reading by itself after it
+     * (re)connects once startReading() has been called, so ReaderHandler
+     * doesn't need to retry it
+     */
+    public default boolean resumesReading() {
+        return false;
+    }
 }

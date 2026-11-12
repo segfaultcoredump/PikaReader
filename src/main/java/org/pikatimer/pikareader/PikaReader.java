@@ -104,11 +104,16 @@ public class PikaReader {
         
         // start the status handler
         StatusHandler statusHandler = StatusHandler.getInstance();      
+
+        // Go back to reading if the readers were reading when PikaReader last
+        // stopped (power loss, crash or restart in the middle of a race)
+        readerHandler.resumeReading();
        
         // The JVM runs shutdown hooks on SIGINT (Ctrl-C), SIGTERM and SIGHUP
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown signal received. Stopping Readers...");
-            readerHandler.stopReading();
+            // Keeps the saved reading state, so the next start resumes
+            readerHandler.shutdown();
 
             // Write out any reads still waiting for the DB thread's next cycle
             tagDB.flush();

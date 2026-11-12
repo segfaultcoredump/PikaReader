@@ -118,7 +118,7 @@ public class TagReadProcessor implements Runnable {
                 // after it would be lost
                 try {
                     if (!tags.isEmpty()) {
-                        logger.debug("Recieved {} raw tag reads to process", tags.size());
+                        logger.trace("Recieved {} raw tag reads to process", tags.size());
                     }
 
                     // sort all of the new tags by their timestamp
@@ -177,7 +177,10 @@ public class TagReadProcessor implements Runnable {
             }
         }
 
-        logger.trace("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);
+        // Guarded: the arguments are costly and this runs for every raw read
+        if (logger.isTraceEnabled()) {
+            logger.trace("TagRead: {} Timestamp: {} Reader: {} Antenna: {} RSSI: {}", tr.getEPCDecimal(), tr.getTimestamp().format(formatter), tr.readerID, tr.antennaPortNumber, tr.rssi);
+        }
         // Never throw on the reader's IO thread, even if we are backed up
         if (!tagQueue.offer(tr)) {
             logger.warn("Tag read queue is full, dropping read of {} from reader {}", tr.getEPCDecimal(), tr.readerID);

@@ -19,12 +19,20 @@ package org.pikatimer.pikareader.conf;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -178,15 +186,33 @@ public class PikaConfig {
         logger.trace("Exiting PikaConfig::loadConfig()");
     }
 
-    private void saveConfig() {
-        // write the config file out to disk
+    private synchronized void saveConfig() {
+        // write the config file out to disk. Write a temp file, force it to
+        // disk and rename it over the config, so pulling the power mid-save
+        // leaves either the old config or the new one, never a partial file.
         logger.info("Saving config");
-        try (FileWriter file = new FileWriter(configFile, StandardCharsets.UTF_8)) {
-            //file.write(configRoot.toString(4));
-            configRoot.write(file, 4, 0);
+        Path target = configFile.toPath().toAbsolutePath();
+        Path temp = target.resolveSibling(target.getFileName() + ".tmp");
+        try {
+            try (FileOutputStream out = new FileOutputStream(temp.toFile());
+                    Writer file = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+                configRoot.write(file, 4, 0);
+                file.flush();
+                out.getFD().sync();
+            }
+            try {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ex) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            // Make the rename itself durable (works on Linux)
+            try (FileChannel dir = FileChannel.open(target.getParent(), StandardOpenOption.READ)) {
+                dir.force(true);
+            } catch (IOException ex) {
+                logger.trace("Unable to sync the config directory", ex);
+            }
             logger.info("Saved PikaReader config file to {}", configFile.getAbsolutePath());
         } catch (IOException ex) {
-            // TODO Auto-generated catch block
             logger.error("Unable to save config file at {}", configFile.getAbsolutePath(), ex);
         }
     }

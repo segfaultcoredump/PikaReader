@@ -31,7 +31,6 @@ import org.pikatimer.pikareader.tags.TagReadProcessor;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.ZonedDateTime;
 
 import java.util.List;
 import org.slf4j.Logger;
@@ -65,21 +64,9 @@ public class ImpinjTagReportListener implements TagReportListener {
             TagRead tr = new TagRead();
 
             tr.setReaderID(readerID);
-            
-            logger.trace("Tag Read: {} at {} on port {}",  t.getEpc().toHexString(), t.getLastSeenTime().getLocalDateTime().toInstant().toString(), t.getAntennaPortNumber());
 
-            /*
-            System.out.print(" EPC: " + t.getEpc().toHexString());
-            //Long epc = Long.decode("0x" + t.getEpc().toHexString());
-            BigInteger epc = new BigInteger(t.getEpc().toHexString(),16);
-            
-            //TagData td = t.getEpc();
-            System.out.print(" Tag: " + td.toWordList());
-            System.out.print(" Chip #: " + epc.toString());
-             */
-            tr.setEPC(t.getEpc().toHexString());
-            
-//            tr.setReaderIP(reader.getAddress());
+            String epc = t.getEpc().toHexString();
+            tr.setEPC(epc);
 
             // Save the antenna port number
             // short can't directly convert to an Integer. Thank kids. 
@@ -91,6 +78,11 @@ public class ImpinjTagReportListener implements TagReportListener {
             // Impinj returns a Date object in UTC, So we get to convert it. 
             Instant timestamp = t.getFirstSeenTime().getLocalDateTime().toInstant();
 
+            // Guarded: this runs for every raw read
+            if (logger.isTraceEnabled()) {
+                logger.trace("Tag Read: {} at {} on port {}", epc, timestamp, t.getAntennaPortNumber());
+            }
+
             // The reader's timestamp is used as-is, but warn if the reader's
             // clock has drifted away from the local clock (NTP or the SSH clock set failed)
             if (clock != null) {
@@ -98,7 +90,7 @@ public class ImpinjTagReportListener implements TagReportListener {
             }
 
             tr.setEpochMilli(timestamp.toEpochMilli());
-            tr.setTZOffset(ZonedDateTime.ofInstant(timestamp, zoneId).getOffset().toString());
+            tr.setTZOffset(zoneId.getRules().getOffset(timestamp).toString());
             tr.setTimestamp(LocalDateTime.ofInstant(timestamp, zoneId));
 
             tagReadProcessor.processTagRead(tr);

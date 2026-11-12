@@ -1632,6 +1632,12 @@ public class Zebra implements RFIDReader {
      * Reading
      */
     @Override
+    public boolean resumesReading() {
+        // ZebraConnectionMonitor resumes reading after each (re)connect
+        return true;
+    }
+
+    @Override
     public void startReading() {
         logger.info("Starting the reader with the following config: " + readerConfig.toString(4));
         wantReading = true;

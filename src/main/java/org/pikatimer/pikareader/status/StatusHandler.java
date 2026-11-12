@@ -34,8 +34,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +51,10 @@ import org.slf4j.LoggerFactory;
 public class StatusHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(StatusHandler.class);
-    private static final BlockingQueue<TagRead> tagQueue = new ArrayBlockingQueue<>(100000);
+    // Every raw read, for the per-antenna stats. Unbounded so postRead()
+    // never drops a read or throws on a reader's IO thread; the status task
+    // drains it once a second.
+    private static final Queue<TagRead> tagQueue = new ConcurrentLinkedQueue<>();
 
     private static final ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
 
@@ -84,150 +87,159 @@ public class StatusHandler {
         logger.debug("StatusHandler Init starting");
 
         Runnable statusUpdate = () -> {
+            // scheduleAtFixedRate() never runs the task again once it throws,
+            // and then nothing drains tagQueue, so never let it throw
+            try {
 
-            ReaderHandler readerHandler = ReaderHandler.getInstance();
+                ReaderHandler readerHandler = ReaderHandler.getInstance();
 
-            logger.trace("statusUpdate fired");
-            JSONObject statusReport = new JSONObject();
+                logger.trace("statusUpdate fired");
+                JSONObject statusReport = new JSONObject();
 
-            logger.trace("Setting reading stats");
-            statusReport.put("reading", readerHandler.isReading());
-            statusReport.put("totalReads", totalReads);
-            if (lastChipRead != null) {
-                statusReport.put("lastChipRead", lastChipRead.getChip());
-                statusReport.put("lastChipReadTime", lastChipRead.getTimestamp().format(formatter));
-            }
-            statusReport.put("unitID", pikaConfig.getStringValue("UnitID"));
+                logger.trace("Setting reading stats");
+                statusReport.put("reading", readerHandler.isReading());
+                statusReport.put("totalReads", totalReads);
+                if (lastChipRead != null) {
+                    statusReport.put("lastChipRead", lastChipRead.getChip());
+                    statusReport.put("lastChipReadTime", lastChipRead.getTimestamp().format(formatter));
+                }
+                statusReport.put("unitID", pikaConfig.getStringValue("UnitID"));
 
-            ReaderProfile profile = ProfileManager.getInstance().getCurrent();
-            JSONObject profileStatus = new JSONObject();
-            profileStatus.put("id", profile.id());
-            profileStatus.put("name", profile.name());
-            statusReport.put("profile", profileStatus);
+                ReaderProfile profile = ProfileManager.getInstance().getCurrent();
+                JSONObject profileStatus = new JSONObject();
+                profileStatus.put("id", profile.id());
+                profileStatus.put("name", profile.name());
+                statusReport.put("profile", profileStatus);
 
-            logger.trace("Getting readers");
+                logger.trace("Getting readers");
 
-            Collection<RFIDReader> readers = readerHandler.getReaders();
-            Map<String, RFIDReader> readerMap = new HashMap<>();
+                Collection<RFIDReader> readers = readerHandler.getReaders();
+                Map<String, RFIDReader> readerMap = new HashMap<>();
 
-            // Track the strongest read on a given antenna
-            Map<String, Map<Integer, Double>> antennaReadStrengthMap = new HashMap<>(32);
+                // Track the strongest read on a given antenna
+                Map<String, Map<Integer, Double>> antennaReadStrengthMap = new HashMap<>(32);
 
-            JSONArray readerStatus = new JSONArray();
-            readers.forEach(r -> {
-                JSONObject reader = new JSONObject();
-                reader.put("id", r.getID());
-                reader.put("name", "Reader " + r.getID());
-                reader.put("reading", r.isReading());
-                reader.put("portStatus", r.getAntennaStatus());
-                reader.put("type", r.getType());
-                reader.put("connected", r.isConnected());
-                reader.put("status", r.getStatus());
-                readerStatus.put(reader);
+                JSONArray readerStatus = new JSONArray();
+                readers.forEach(r -> {
+                    JSONObject reader = new JSONObject();
+                    reader.put("id", r.getID());
+                    reader.put("name", "Reader " + r.getID());
+                    reader.put("reading", r.isReading());
+                    reader.put("portStatus", r.getAntennaStatus());
+                    reader.put("type", r.getType());
+                    reader.put("connected", r.isConnected());
+                    reader.put("status", r.getStatus());
+                    readerStatus.put(reader);
 
-                readerMap.put("Reader " + r.getID(), r);
+                    readerMap.put("Reader " + r.getID(), r);
 
-                Map<Integer, Double> s = new HashMap<>(4);
-                r.getAntennaStatus().keySet().stream().sorted().forEach(v -> {
-                    s.put(v, -100.0);
+                    Map<Integer, Double> s = new HashMap<>(4);
+                    r.getAntennaStatus().keySet().stream().sorted().forEach(v -> {
+                        s.put(v, -100.0);
+                    });
+                    antennaReadStrengthMap.put(r.getID().toString(), s);
+
                 });
-                antennaReadStrengthMap.put(r.getID().toString(), s);
+                statusReport.put("readers", readerStatus);
 
-            });
-            statusReport.put("readers", readerStatus);
+                logger.trace("Done enumerating readers");
 
-            logger.trace("Done enumerating readers");
+                List<TagRead> tags = new ArrayList<>();
+                TagRead queued;
+                while ((queued = tagQueue.poll()) != null) {
+                    tags.add(queued);
+                }
 
-            List<TagRead> tags = new ArrayList<>();
-            tagQueue.drainTo(tags);
+                statusReport.put("Raw Tag Reads/s", tags.size());
 
-            statusReport.put("Raw Tag Reads/s", tags.size());
+                logger.trace("Found {} tags in the last update interval", tags.size());
 
-            logger.trace("Found {} tags in the last update interval", tags.size());
+                tags.forEach(t -> {
+                    String readerID = t.getReaderID().toString();
+                    Integer antennaID = t.getReaderAntenna();
+                    Double rssi = t.getPeakRSSI();
 
-            tags.forEach(t -> {
-                String readerID = t.getReaderID().toString();
-                Integer antennaID = t.getReaderAntenna();
-                Double rssi = t.getPeakRSSI();
-
-                if (antennaReadStrengthMap.containsKey(readerID)) {
-                    Map<Integer, Double> stat = antennaReadStrengthMap.get(readerID);
-                    if (stat.containsKey(antennaID)) {
-                        if (rssi.compareTo(stat.get(antennaID)) > 0) {
+                    if (antennaReadStrengthMap.containsKey(readerID)) {
+                        Map<Integer, Double> stat = antennaReadStrengthMap.get(readerID);
+                        if (stat.containsKey(antennaID)) {
+                            if (rssi.compareTo(stat.get(antennaID)) > 0) {
+                                stat.put(antennaID, rssi);
+                            }
+                        } else {
                             stat.put(antennaID, rssi);
                         }
                     } else {
-                        stat.put(antennaID, rssi);
+                        Map<Integer, Double> s = new HashMap<>(4);
+                        s.put(antennaID, rssi);
+                        antennaReadStrengthMap.put(readerID, s);
                     }
-                } else {
-                    Map<Integer, Double> s = new HashMap<>(4);
-                    s.put(antennaID, rssi);
-                    antennaReadStrengthMap.put(readerID, s);
-                }
-            });
-
-            JSONObject readerPortStats = new JSONObject();
-            antennaReadStrengthMap.keySet().forEach(a -> {
-                JSONArray readStats = new JSONArray();
-                JSONArray portLabels = new JSONArray();
-                JSONArray portStatus = new JSONArray();
-                JSONObject stats = new JSONObject();
-
-                antennaReadStrengthMap.get(a).keySet().stream().sorted().forEach(k -> {
-                    String stat = readerMap.get("Reader " + a).getAntennaStatus().get(k);
-                    portStatus.put(stat);
-                    
-                    // Some readers have phantom cross reads that screw up the stats
-                    if ("Connected".endsWith(stat)) readStats.put(antennaReadStrengthMap.get(a).get(k));
-                    else readStats.put(-100);
-                    
-                    portLabels.put("Port " + k);
                 });
-                stats.put("labels", portLabels);
-                stats.put("status", portStatus);
-                stats.put("readStrength", readStats);
-                readerPortStats.put("Reader " + a, stats);
-            });
 
-            statusReport.put("readerPortStats", readerPortStats);
+                JSONObject readerPortStats = new JSONObject();
+                antennaReadStrengthMap.keySet().forEach(a -> {
+                    JSONArray readStats = new JSONArray();
+                    JSONArray portLabels = new JSONArray();
+                    JSONArray portStatus = new JSONArray();
+                    JSONObject stats = new JSONObject();
 
-            //statusReport.put("antenna read strength", antennaReadStrengthMap);
+                    antennaReadStrengthMap.get(a).keySet().stream().sorted().forEach(k -> {
+                        String stat = readerMap.get("Reader " + a).getAntennaStatus().get(k);
+                        portStatus.put(stat);
+                    
+                        // Some readers have phantom cross reads that screw up the stats
+                        if ("Connected".endsWith(stat)) readStats.put(antennaReadStrengthMap.get(a).get(k));
+                        else readStats.put(-100);
+                    
+                        portLabels.put("Port " + k);
+                    });
+                    stats.put("labels", portLabels);
+                    stats.put("status", portStatus);
+                    stats.put("readStrength", readStats);
+                    readerPortStats.put("Reader " + a, stats);
+                });
+
+                statusReport.put("readerPortStats", readerPortStats);
+
+                //statusReport.put("antenna read strength", antennaReadStrengthMap);
             
             
-            // External Status from helper app 
-            String statusFile = pikaConfig.getStringValue("StatusFile");
-            //logger.info("StatusHandler: statusFile is set to {}",statusFile);
-            if (statusFile != null && ! statusFile.isEmpty()) {
-                try {
-                    // Grab the file and parse the json
-                    JSONObject externalStatus = new JSONObject(Files.readString(Paths.get(statusFile))); 
+                // External Status from helper app 
+                String statusFile = pikaConfig.getStringValue("StatusFile");
+                //logger.info("StatusHandler: statusFile is set to {}",statusFile);
+                if (statusFile != null && ! statusFile.isEmpty()) {
+                    try {
+                        // Grab the file and parse the json
+                        JSONObject externalStatus = new JSONObject(Files.readString(Paths.get(statusFile))); 
                     
-                    // Check to see if we have a battery level
-                    if (externalStatus.opt("BATTERY") instanceof Number) statusReport.put("battery",externalStatus.get("BATTERY"));
+                        // Check to see if we have a battery level
+                        if (externalStatus.opt("BATTERY") instanceof Number) statusReport.put("battery",externalStatus.get("BATTERY"));
                     
-                } catch (Exception ex) {
-                    logger.info("Error reading external status file: {}",statusFile,ex);
-                }
+                    } catch (Exception ex) {
+                        logger.info("Error reading external status file: {}",statusFile,ex);
+                    }
 
-                // TODO:
-                // GPS Stats
-                // NTP Stats
-                // Estimated Runtime Remaining
+                    // TODO:
+                    // GPS Stats
+                    // NTP Stats
+                    // Estimated Runtime Remaining
                 
-            } else {
-                statusReport.put("Battery",-1);
-            }
+                } else {
+                    statusReport.put("Battery",-1);
+                }
             
             
-            Instant now = Instant.now();
+                Instant now = Instant.now();
 
-            statusReport.put("timestamp", now.toString());
-            statusReport.put("localTime", LocalDateTime.ofInstant(now, pikaConfig.getTimezoneId()).toString());
-            statusReport.put("timezone", pikaConfig.getTimezoneId().toString());
-            lastStatus = statusReport;
-            httpHandler.postStatus(statusReport);
-            logger.trace("Status Report: " + statusReport.toString(4));
-            logger.trace("statusUpdate complete");
+                statusReport.put("timestamp", now.toString());
+                statusReport.put("localTime", LocalDateTime.ofInstant(now, pikaConfig.getTimezoneId()).toString());
+                statusReport.put("timezone", pikaConfig.getTimezoneId().toString());
+                lastStatus = statusReport;
+                httpHandler.postStatus(statusReport);
+                logger.trace("Status Report: " + statusReport.toString(4));
+                logger.trace("statusUpdate complete");
+            } catch (RuntimeException ex) {
+                logger.error("Error building the status update", ex);
+            }
         };
 
         // Fire off once a second as close to the second as possible
@@ -239,14 +251,12 @@ public class StatusHandler {
     }
 
     public void postRead(TagRead read) {
-        tagQueue.add(read);
+        // Always succeeds: the queue is unbounded
+        tagQueue.offer(read);
     }
 
     public void postReads(Collection<TagRead> reads) {
-        reads.forEach(r -> {
-            tagQueue.add(r);
-        });
-
+        reads.forEach(tagQueue::offer);
     }
 
     public void clearReadCount() {

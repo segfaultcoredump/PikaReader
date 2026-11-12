@@ -102,13 +102,59 @@ A window opens on a tag's first read and closes when its time is up. While the t
 For the gory details (what each profile sets on the Impinj and Zebra readers, how sessions are assigned, the profile settings in the config file and per-reader overrides, plus the setup and config options for each Impinj and Zebra / Motorola FX reader), see [Gory Details](Gory%20Details.md).
 
 ## Logging
-Debug logs are written to `pikareader.log` in the system temp directory. Use `-DPIKAREADER_LOG=/path/to/file.log` to change the output file name and location.
+Logs are written to `pikareader.log` in the system temp directory. Use `-DPIKAREADER_LOG=/path/to/file.log` to change the output file name and location.
+PikaReader logs at INFO, to keep race-day writes to the SD card down. For debug logging, copy `src/main/resources/logback.xml`, set `org.pikatimer` to `debug`, and run with `-Dlogback.configurationFile=/path/to/logback.xml`.
 A new log file is started each time PikaReader runs, and the logs from the last 5 runs are kept (`pikareader.log`, `pikareader.log.1` ... `pikareader.log.4`).
 
 ## Notice!
 The first time the app is run, it will automatically create a basic config file. 
 You will need to quit PikaReader and then edit the ~/.PikaReader.conf file to configure the app. 
 Once this is done you can restart the app and being using it. 
+
+## Recommended JVM Settings
+These settings are for a Raspberry Pi 4B with one Impinj R420 on a busy line, for example start mats with 5,000 runners crossing in 10 minutes. Use 64-bit Raspberry Pi OS and Java 21 or newer.
+
+```
+java -XX:+UseSerialGC \
+     -Xms256m -Xmx256m -Xmn64m -XX:+AlwaysPreTouch \
+     -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m \
+     -XX:+ExitOnOutOfMemoryError \
+     -Xlog:gc*:file=/var/log/pikareader/gc.log:time,uptime:filecount=3,filesize=5m \
+     -jar PikaReader.jar
+```
+
+- **Serial GC.** On a Pi with 2 GB of RAM or more, Java picks G1 and a heap of 1/4 of RAM by default. G1 uses more CPU and memory to keep pauses short on large heaps, and PikaReader doesn't need that. Its working set is a few tens of MB, and short GC pauses don't affect timing: every read carries the reader's own timestamp.
+- **Heap size by Pi RAM:**
+    - 1 GB Pi: `-Xms192m -Xmx192m -Xmn48m`
+    - 2 GB or more: 256m as above
+    - 384m if several timing clients rewind a large day of reads at the same time. A full-day `/rewind` is the biggest short-term use of memory.
+- **`-Xms` equal to `-Xmx`, plus `-XX:+AlwaysPreTouch`:** the whole heap is set up at startup, not in the middle of a race.
+- **The metaspace, code cache and direct memory limits** keep the total memory use of the process predictable, at about 350–450 MB at most.
+- **`-XX:+ExitOnOutOfMemoryError`:** the JVM exits instead of carrying on with a broken thread. Run PikaReader under a service manager that restarts it, such as the systemd unit below. PikaReader remembers whether the readers were reading (`"Reading"` in the `Reader` section of the config, set by `/start` and `/stop`). After a crash, power loss or restart it goes back to reading, and keeps retrying any reader that is still booting until it starts.
+- **GC log:** the `-Xlog:gc*` option keeps a small rotating GC log. Create `/var/log/pikareader` first, or point the option at another directory. Leave the option out if you don't want the log.
+- **Java 25 or newer:** also add `-XX:+UseCompactObjectHeaders` for about 10–20% less heap use.
+
+Example systemd unit (`/etc/systemd/system/pikareader.service`):
+
+```
+[Unit]
+Description=PikaReader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+Environment=MALLOC_ARENA_MAX=2
+ExecStart=/usr/bin/java -XX:+UseSerialGC -Xms256m -Xmx256m -Xmn64m -XX:+AlwaysPreTouch -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:+ExitOnOutOfMemoryError -Xlog:gc*:file=/var/log/pikareader/gc.log:time,uptime:filecount=3,filesize=5m -jar /opt/pikareader/PikaReader.jar
+Restart=always
+RestartSec=2
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`MALLOC_ARENA_MAX=2` limits glibc's per-thread malloc arenas, which lowers the memory use of the process on a 4-core Pi.
 
 
 
