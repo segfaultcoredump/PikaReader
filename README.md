@@ -108,8 +108,10 @@ A new log file is started each time PikaReader runs, and the logs from the last 
 
 ## Notice!
 The first time the app is run, it will automatically create a basic config file. 
-You will need to quit PikaReader and then edit the ~/.PikaReader.conf file to configure the app. 
-Once this is done you can restart the app and being using it. 
+You will need to quit PikaReader and then edit the `~/.PikaReader.toml` file to configure the app (use `-DCONFIG=/path/to/file.toml` to keep it somewhere else). 
+The file is [TOML](https://toml.io), and each setting has a comment explaining it. PikaReader saves some settings back to the file itself (the reader profile, whether it is reading, the unit's IP address); comments on the lines above a setting are kept when it does. 
+If the file has a mistake in it, PikaReader logs the error and the line number, and exits. 
+Once this is done you can restart the app and begin using it. 
 
 ## Recommended JVM Settings
 These settings are for a Raspberry Pi 4B with one Impinj R420 on a busy line, for example start mats with 5,000 runners crossing in 10 minutes. Use 64-bit Raspberry Pi OS and Java 21 or newer.
@@ -130,7 +132,7 @@ java -XX:+UseSerialGC \
     - 384m if several timing clients rewind a large day of reads at the same time. A full-day `/rewind` is the biggest short-term use of memory.
 - **`-Xms` equal to `-Xmx`, plus `-XX:+AlwaysPreTouch`:** the whole heap is set up at startup, not in the middle of a race.
 - **The metaspace, code cache and direct memory limits** keep the total memory use of the process predictable, at about 350–450 MB at most.
-- **`-XX:+ExitOnOutOfMemoryError`:** the JVM exits instead of carrying on with a broken thread. Run PikaReader under a service manager that restarts it, such as the systemd unit below. PikaReader remembers whether the readers were reading (`"Reading"` in the `Reader` section of the config, set by `/start` and `/stop`). After a crash, power loss or restart it goes back to reading, and keeps retrying any reader that is still booting until it starts.
+- **`-XX:+ExitOnOutOfMemoryError`:** the JVM exits instead of carrying on with a broken thread. Run PikaReader under a service manager that restarts it, such as the systemd unit below. PikaReader remembers whether the readers were reading (`Reading` in the `[Reader]` section of the config, set by `/start` and `/stop`). After a crash, power loss or restart it goes back to reading, and keeps retrying any reader that is still booting until it starts.
 - **GC log:** the `-Xlog:gc*` option keeps a small rotating GC log. Create `/var/log/pikareader` first, or point the option at another directory. Leave the option out if you don't want the log.
 - **Java 25 or newer:** also add `-XX:+UseCompactObjectHeaders` for about 10–20% less heap use.
 

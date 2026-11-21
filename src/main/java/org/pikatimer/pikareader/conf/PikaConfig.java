@@ -16,11 +16,13 @@
  */
 package org.pikatimer.pikareader.conf;
 
-import java.io.BufferedReader;
+import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.core.io.ParsingException;
 import java.io.File;
-import java.io.FileReader;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.LineNumberReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.net.InetAddress;
@@ -39,7 +41,6 @@ import java.time.ZonedDateTime;
 import java.util.Enumeration;
 import java.util.HexFormat;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -55,8 +56,22 @@ public class PikaConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(PikaConfig.class);
 
+    /** The first-run config file, with comments for each setting */
+    private static final String TEMPLATE = "/default-config.toml";
+
+    /**
+     * The config as the rest of PikaReader sees it. getKey() hands out the
+     * live sub-objects, which callers change and then save with putObject().
+     */
     private JSONObject configRoot;
-    private final File configFile = new File(System.getProperty("CONFIG", System.getProperty("user.home") + "/.PikaReader.cfg"));
+
+    /**
+     * The config file as parsed, with its comments and key order. Each save
+     * merges configRoot into it so the user's comments stay in the file.
+     */
+    private CommentedConfig document;
+
+    private final File configFile = new File(System.getProperty("CONFIG", System.getProperty("user.home") + "/.PikaReader.toml"));
     
     ZoneId zoneId = ZoneId.systemDefault();
 
@@ -84,35 +99,46 @@ public class PikaConfig {
         logger.trace("Starting PikaConfig::loadConfig()");
         
         
-        JSONObject root= new JSONObject();
-        try {
-            // does the config file exist?
-            if (configFile.createNewFile()) {
+        // does the config file exist? If not, start from the commented template
+        if (!configFile.exists()) {
+            try (InputStream in = PikaConfig.class.getResourceAsStream(TEMPLATE)) {
+                if (in == null) {
+                    throw new IOException(TEMPLATE + " is missing from the jar");
+                }
+                Path parent = configFile.toPath().toAbsolutePath().getParent();
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                Files.copy(in, configFile.toPath());
                 logger.info("Created new config file at {}", configFile.getAbsolutePath());
-                root.put("Version", VERSION);
-                configRoot = root;
-                saveConfig();
-            } else {
-                logger.info("Reading existing config file at {}", configFile.getAbsolutePath());
-                try (FileReader file = new FileReader(configFile, StandardCharsets.UTF_8)) {
-                    BufferedReader r = new BufferedReader(file);
-                    root = new JSONObject(r.lines().collect(Collectors.joining()));
-                    r.close();
-                } catch (Exception ex) {
-                    logger.error("Error in config file at {}", configFile.getAbsolutePath(), ex);
-                    System.exit(0);
-                }
-                logger.debug("Read existing config file with version {}", root.optString("Version"));
-                configRoot = root;
-                if (!root.optString("Version").equals(VERSION)) {
-                    logger.info("Version mismatch, updating to {}", VERSION);
-                    putValue("Version", VERSION);
-                }
-                
+            } catch (IOException ex) {
+                logger.error("Unable to create the config file at {}", configFile.getAbsolutePath(), ex);
+                System.exit(0);
             }
-        } catch (IOException ex) {
-            logger.error("Unable to save config file at {}", configFile.getAbsolutePath(), ex);
+        } else {
+            logger.info("Reading existing config file at {}", configFile.getAbsolutePath());
+        }
+
+        // Count the lines as the parser reads them, since its errors don't say where
+        LineNumberReader lines = null;
+        try (LineNumberReader r = new LineNumberReader(Files.newBufferedReader(configFile.toPath(), StandardCharsets.UTF_8))) {
+            lines = r;
+            document = TomlJson.parse(r);
+            configRoot = TomlJson.toJson(document);
+        } catch (ParsingException ex) {
+            logger.error("Error in config file {} near line {}: {}", configFile.getAbsolutePath(),
+                    // the parser has read the line break at the end of the bad line by then
+                    lines == null ? "?" : Math.max(1, lines.getLineNumber()),
+                    ex.getMessage().strip().replace("\n", "\\n").replace("\r", "\\r"));
             System.exit(0);
+        } catch (Exception ex) {
+            logger.error("Unable to read config file at {}", configFile.getAbsolutePath(), ex);
+            System.exit(0);
+        }
+        logger.debug("Read config file with version {}", configRoot.optString("Version"));
+        if (!configRoot.optString("Version").equals(VERSION)) {
+            logger.info("Version mismatch, updating to {}", VERSION);
+            putValue("Version", VERSION);
         }
         
         // look for some defaults:
@@ -196,7 +222,8 @@ public class PikaConfig {
         try {
             try (FileOutputStream out = new FileOutputStream(temp.toFile());
                     Writer file = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
-                configRoot.write(file, 4, 0);
+                TomlJson.merge(document, configRoot);
+                TomlJson.write(document, file);
                 file.flush();
                 out.getFD().sync();
             }

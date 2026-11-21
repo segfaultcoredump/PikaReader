@@ -50,6 +50,12 @@
             <artifactId>json</artifactId>
             <version>20260814</version>
         </dependency>
+        <!-- TOML config file (~/.PikaReader.toml), keeps comments on rewrite -->
+        <dependency>
+            <groupId>com.electronwill.night-config</groupId>
+            <artifactId>toml</artifactId>
+            <version>3.9.0</version>
+        </dependency>
         <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-databind -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

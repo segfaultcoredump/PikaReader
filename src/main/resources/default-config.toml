@@ -1,0 +1,65 @@
+# PikaReader config file. See README.md and "Gory Details.md" for every option.
+# Stop PikaReader before editing this file and start it again afterwards.
+# PikaReader also saves its own changes here (UnitIP, Profile, Reading, ...).
+# Comments on the lines above a setting are kept when it does.
+#
+# The config file version. Set by PikaReader.
+Version = "1.0"
+
+# The name this unit reports to the timing app. Left blank, PikaReader uses
+# the end of the network card's MAC address.
+UnitID = ""
+
+# This unit's IP address. Set by PikaReader each time it starts.
+UnitIP = ""
+
+# AUTO uses the system timezone. Or set a zone ID such as "America/Chicago",
+# or an offset such as "-06:00".
+Timezone = "AUTO"
+
+# How tag chips are reported: "Decimal" or "Hex".
+ChipFormat = "Decimal"
+
+# Optional path of a file that PikaReader writes its status to every second.
+# Leave it empty to turn it off.
+StatusFile = ""
+
+[Web]
+# The web UI and API port.
+Port = 8080
+
+[DB]
+# Days of tag reads to keep. PikaReader adds the read directory ("Path") on
+# the first run: ~/.PikaReader, or the -DDB=<path> setting.
+Retention = 180
+
+# Add one [[Reader.Readers]] section per reader, each with a unique Index.
+# Type is IMPINJ or ZEBRA. Everything except Index, Type and IP is optional.
+[Reader]
+# The reader profile: start_mats, start_side_panels, finish_mats,
+# finish_side_panels or split_side_panels. Can be changed in the web UI.
+Profile = "finish_mats"
+
+# "Auto" uses the region each reader reports. Or fcc, global_other, etsi_lb,
+# etsi_hb or japan.
+Region = "Auto"
+
+# How reads are de-duplicated: READER, BOX or ANTENNA.
+# For a different Finish Mats read window (default 2 s), add
+# "Finish Mats Gating" = 3
+"Gating Style" = "READER"
+
+[[Reader.Readers]]
+Index = 1
+Type = "IMPINJ"
+IP = "192.0.2.10"
+
+# Low, Medium, High or Max.
+# Other options (see "Gory Details.md"):
+# TLS = true
+# Port = 5084
+# Clock = "NTP"
+# Model = "FX9600"     (Zebra only)
+# "Antenna Config" = { 4 = "Disabled" }
+# Profiles = { finish_side_panels = { "Tag Population" = 64 } }
+"Power Level" = "High"

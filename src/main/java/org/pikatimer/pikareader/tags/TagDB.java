@@ -86,11 +86,14 @@ public class TagDB {
         // Get the config
         dbConfig = pikaConfig.getKey("DB");
 
-        // if we have an empty config, build out the defaults
-        if (dbConfig.isEmpty()) {
-            dbConfig.put("Path", System.getProperty("DB", System.getProperty("user.home") + "/.PikaReader")); // Default Gating of 3 seconds
-            dbConfig.put("Retention", 180); // 180 days
-
+        // fill in any defaults that are missing
+        if (!dbConfig.has("Path") || !dbConfig.has("Retention")) {
+            if (!dbConfig.has("Path")) {
+                dbConfig.put("Path", System.getProperty("DB", System.getProperty("user.home") + "/.PikaReader"));
+            }
+            if (!dbConfig.has("Retention")) {
+                dbConfig.put("Retention", 180); // 180 days
+            }
             pikaConfig.putObject("DB", dbConfig);
         }
 

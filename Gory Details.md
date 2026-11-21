@@ -16,16 +16,14 @@ All of the values live in `src/main/resources/reader-profiles.json`. When a read
 
 Sessions: if more than one reader is configured, they get sessions 2, 3, 2, 3... in `Index` order, so two readers watching the same tags don't fight over the same session flag. A lone reader gets session 2 or 3 at random each time PikaReader starts. Use a `Session` override to pin it.
 
-Profile settings go in the `Reader` section of the config file:
+Profile settings go in the `[Reader]` section of the config file (`~/.PikaReader.toml`):
 
-```json
-"Reader": {
-  "Profile": "finish_mats",
-  "Region": "Auto",
-  "Gating Style": "READER",
-  "Finish Mats Gating": 2,
-  "Readers": [ ... ]
-}
+```toml
+[Reader]
+Profile = "finish_mats"
+Region = "Auto"
+"Gating Style" = "READER"
+"Finish Mats Gating" = 2
 ```
 
 - `Profile`: the selected profile, by id or name. Saved whenever the profile is changed. Missing or unknown defaults to `finish_mats`.
@@ -33,14 +31,23 @@ Profile settings go in the `Reader` section of the config file:
 - `Finish Mats Gating`: optional, the Finish Mats read window in seconds (default 2). The old `Gating` setting is no longer used; PikaReader logs a warning if it's still there.
 - `Region`: `Auto` (default) uses the region each reader reports. Or set one of `fcc`, `global_other` (non-FCC regions in 902-928 MHz, such as Australia), `etsi_lb` (865-868 MHz), `etsi_hb` (915-921 MHz) or `japan`. Only the R700's reader modes depend on the region. If PikaReader can't tell an R700's region, or the reader reports a different region than the one set here, the R700 uses its own default reader mode and an error is logged.
 
-Each reader can override any profile's settings in its own `Profiles` entry. Anything not overridden uses the profile's default for that reader model and region. Profiles can be named by id or by name:
+Each reader can override any profile's settings in its own `Profiles` table. Anything not overridden uses the profile's default for that reader model and region. Profiles can be named by id or by name (quote names that have spaces):
 
-```json
-"Profiles": {
-  "finish_side_panels": {"Reader Mode": "DenseReaderM8", "Tag Population": 64},
-  "Start Mats": {"Session": 3, "Power Level": "Max"}
-}
+```toml
+[[Reader.Readers]]
+Index = 1
+# ...
+
+[Reader.Readers.Profiles.finish_side_panels]
+"Reader Mode" = "DenseReaderM8"
+"Tag Population" = 64
+
+[Reader.Readers.Profiles."Start Mats"]
+Session = 3
+"Power Level" = "Max"
 ```
+
+A `[Reader.Readers.<...>]` section belongs to the `[[Reader.Readers]]` section above it. The same overrides can also be written on one line inside the reader's section: `Profiles = { finish_side_panels = { "Tag Population" = 64 } }`.
 
 The settings you can override are listed for each reader type below. `Reader Mode`, `Search Mode`, `Session` and `Tag Population` are no longer read from the top level of a reader's entry. PikaReader logs a warning if it finds them there; move them into `Profiles`.
 
@@ -52,21 +59,21 @@ PikaReader reads the model from the reader:
 - **R220**: has fewer reader modes than the R420 and is expected to reject Max Miller, so the profiles fall through to `DenseReaderM4` (2). Its 200 tags/s limit (the R420 does 1,100) gives only about 5 reads per tag when 10 runners cross at once, so it suits side panels and quiet splits. PikaReader warns when an R220 is given the Start Mats profile, and cautions on Finish Mats. The warnings are logged, shown by `/profile`, and shown in the web UI after changing the profile. It has two ports (more with Speedway Antenna Hubs). It is only sold for FCC, GX and EU1 (ETSI LB) regions, so an R220 reporting any other region is treated as a region mismatch.
 - **R720**: uses the R700's reader modes. Impinj lists it as end of life.
 
-Add one entry per reader to the `Readers` list in the config file. Each reader needs a unique `Index`. Everything except `Index`, `Type` and `IP` is optional:
+Add one `[[Reader.Readers]]` section per reader to the config file. Each reader needs a unique `Index`. Everything except `Index`, `Type` and `IP` is optional:
 
-```json
-{
-  "Index": 1,
-  "Type": "IMPINJ",
-  "IP": "192.0.2.10",
-  "TLS": false,
-  "Power Level": "High",
-  "Antenna Config": {"4": "Disabled"},
-  "Clock": "Local",
-  "Profiles": {
-    "finish_side_panels": {"Reader Mode": "DenseReaderM8", "Tag Population": 64}
-  }
-}
+```toml
+[[Reader.Readers]]
+Index = 1
+Type = "IMPINJ"
+IP = "192.0.2.10"
+TLS = false
+"Power Level" = "High"
+Clock = "Local"
+"Antenna Config" = { 4 = "Disabled" }
+
+[Reader.Readers.Profiles.finish_side_panels]
+"Reader Mode" = "DenseReaderM8"
+"Tag Population" = 64
 ```
 
 - `TLS`: `true` connects with LLRP over TLS (the reader must have LLRP over TLS enabled). Default `false`. The reader's certificate is not checked, and old TLS algorithms are allowed, because the readers are expected to be directly connected to PikaReader.
@@ -104,24 +111,23 @@ Model notes:
 Port count, power levels, RF modes and clock support are read from the reader when PikaReader connects, so the same settings work across the FX models.
 The capabilities, the reader's RF mode table and the choices PikaReader made are all written to the log.
 
-Add one entry per reader to the `Readers` list in the config file. Each reader needs a unique `Index`. Everything except `Index`, `Type` and `IP` is optional:
+Add one `[[Reader.Readers]]` section per reader to the config file. Each reader needs a unique `Index`. Everything except `Index`, `Type` and `IP` is optional:
 
-```json
-{
-  "Index": 2,
-  "Type": "ZEBRA",
-  "IP": "192.0.2.20",
-  "Port": 5084,
-  "TLS": false,
-  "Power Level": "High",
-  "Antenna Config": {"4": "Disabled"},
-  "Dwell": 500,
-  "Clock": "Delta",
-  "Model": "FX9600",
-  "Profiles": {
-    "finish_mats": {"Reader Mode": "m4_mid_alt"}
-  }
-}
+```toml
+[[Reader.Readers]]
+Index = 2
+Type = "ZEBRA"
+IP = "192.0.2.20"
+Port = 5084
+TLS = false
+"Power Level" = "High"
+Dwell = 500
+Clock = "Delta"
+Model = "FX9600"
+"Antenna Config" = { 4 = "Disabled" }
+
+[Reader.Readers.Profiles.finish_mats]
+"Reader Mode" = "m4_mid_alt"
 ```
 
 - `Model`: `FX7400`, `FX7500`, `FX9500`, `FX9600` or `FXR90`. Optional. LLRP only reports a model number, so this tells PikaReader which model it is talking to: it logs PikaReader's notes for that model, checks the FX9500's minimum firmware, and skips the Zebra extensions on the FX7400 and FX9500. Without it, PikaReader finds out what the reader accepts by trying.
