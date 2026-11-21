@@ -20,13 +20,12 @@ Profile settings go in the `[Reader]` section of the config file (`~/.PikaReader
 
 ```toml
 [Reader]
-Profile = "finish_mats"
 Region = "Auto"
 "Gating Style" = "READER"
 "Finish Mats Gating" = 2
 ```
 
-- `Profile`: the selected profile, by id or name. Saved whenever the profile is changed. Missing or unknown defaults to `finish_mats`.
+- The selected profile isn't in the config: pick it in the web UI or with `PUT /profile/<profile>`. PikaReader saves it as `Profile` in `.PikaReaderState.toml`, next to the config file. Missing or unknown defaults to `finish_mats`.
 - `Gating Style`: `READER` (default), `BOX` or `ANTENNA`. See the read filters in the [README](README.md#reader-profiles).
 - `Finish Mats Gating`: optional, the Finish Mats read window in seconds (default 2). The old `Gating` setting is no longer used; PikaReader logs a warning if it's still there.
 - `Region`: `Auto` (default) uses the region each reader reports. Or set one of `fcc`, `global_other` (non-FCC regions in 902-928 MHz, such as Australia), `etsi_lb` (865-868 MHz), `etsi_hb` (915-921 MHz) or `japan`. Only the R700's reader modes depend on the region. If PikaReader can't tell an R700's region, or the reader reports a different region than the one set here, the R700 uses its own default reader mode and an error is logged.

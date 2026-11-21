@@ -19,27 +19,18 @@ package org.pikatimer.pikareader.conf;
 import com.electronwill.nightconfig.core.CommentedConfig;
 import com.electronwill.nightconfig.core.io.ParsingException;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.LineNumberReader;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.util.Enumeration;
-import java.util.HexFormat;
 import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -58,6 +49,12 @@ public class PikaConfig {
 
     /** The first-run config file, with comments for each setting */
     private static final String TEMPLATE = "/default-config.toml";
+
+    /** The state file's name, in the same folder as the config file */
+    static final String STATE_FILE = ".PikaReaderState.toml";
+
+    /** The UnitID if the hostname can't be found */
+    static final String DEFAULT_UNIT_ID = "PikaReader";
 
     /**
      * The config as the rest of PikaReader sees it. getKey() hands out the
@@ -143,38 +140,18 @@ public class PikaConfig {
         
         // look for some defaults:
         
-        // UnitID and IP
-        // the IP can change so we always update it. 
-        // The MAC is used as a default unit ID and should not change too often once the system is provisioned
-        
-        String MAC = "UNKNOWN";
-        String IP = "UNKNOWN";
-        try {
-            Enumeration<NetworkInterface> networkInterfaces = NetworkInterface.getNetworkInterfaces();
-
-            while (networkInterfaces.hasMoreElements()) {
-                NetworkInterface ni = networkInterfaces.nextElement();
-                if (ni.isUp() && !ni.isLoopback() && ni.getHardwareAddress() != null) {
-                    //System.out.print(HexFormat.ofDelimiter(":").formatHex(ni.getHardwareAddress()) + "-> ");
-                    for (InetAddress a : ni.inetAddresses().toList()) {
-                        if (a.getAddress().length == 4) {
-                            IP = a.getHostAddress();
-                            MAC = HexFormat.ofDelimiter(":").formatHex(ni.getHardwareAddress()).toUpperCase().substring(9);
-                        }
-                    }
-                }
-            }
-        } catch (SocketException ex) {
-
+        // UnitID: defaults to the computer's hostname, saved on the first run
+        // so the unit keeps its name. The IP is only logged: units normally
+        // use DHCP, so it changes from run to run.
+        if (configRoot.has("UnitIP")) {
+            configRoot.remove("UnitIP");
+            saveConfig();
         }
-        logger.info("PikaConfig: Using the following UnitID and IP: " + MAC + "  -> " + IP);
-        
-        if (configRoot.optString("UnitID").isBlank()){
-            putValue("UnitID", MAC);
+        if (configRoot.optString("UnitID").isBlank()) {
+            putValue("UnitID", hostname());
         }
-        
-        putValue("UnitIP", IP);
-        
+        logger.info("PikaConfig: UnitID {}, IP {}", getStringValue("UnitID"), localIP());
+
         // Timezone Settings
         
         // If we don't have a timezone set in the config, create a default value. 
@@ -213,31 +190,14 @@ public class PikaConfig {
     }
 
     private synchronized void saveConfig() {
-        // write the config file out to disk. Write a temp file, force it to
-        // disk and rename it over the config, so pulling the power mid-save
-        // leaves either the old config or the new one, never a partial file.
+        // Written so that pulling the power mid-save leaves either the old
+        // config or the new one, never a partial file.
         logger.info("Saving config");
-        Path target = configFile.toPath().toAbsolutePath();
-        Path temp = target.resolveSibling(target.getFileName() + ".tmp");
         try {
-            try (FileOutputStream out = new FileOutputStream(temp.toFile());
-                    Writer file = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+            AtomicFiles.write(configFile.toPath(), file -> {
                 TomlJson.merge(document, configRoot);
                 TomlJson.write(document, file);
-                file.flush();
-                out.getFD().sync();
-            }
-            try {
-                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException ex) {
-                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
-            }
-            // Make the rename itself durable (works on Linux)
-            try (FileChannel dir = FileChannel.open(target.getParent(), StandardOpenOption.READ)) {
-                dir.force(true);
-            } catch (IOException ex) {
-                logger.trace("Unable to sync the config directory", ex);
-            }
+            });
             logger.info("Saved PikaReader config file to {}", configFile.getAbsolutePath());
         } catch (IOException ex) {
             logger.error("Unable to save config file at {}", configFile.getAbsolutePath(), ex);
@@ -277,5 +237,67 @@ public class PikaConfig {
     
     public ZoneId getTimezoneId(){
         return zoneId;
+    }
+
+    /**
+     * The state file (profile, reading), kept next to the config file so the
+     * config itself is hardly ever rewritten. See PikaState.
+     */
+    public Path getStatePath() {
+        return configFile.toPath().toAbsolutePath().resolveSibling(STATE_FILE);
+    }
+
+    /**
+     * This computer's hostname without the domain, e.g. "pr4-01" for
+     * pr4-01.local. Reads the kernel's hostname on Linux, so no DNS or mDNS
+     * lookup is needed.
+     */
+    static String hostname() {
+        String name = "";
+        try {
+            Path kernel = Path.of("/proc/sys/kernel/hostname");
+            if (Files.isReadable(kernel)) {
+                name = Files.readString(kernel, StandardCharsets.UTF_8);
+            }
+        } catch (IOException | RuntimeException ex) {
+            logger.debug("Unable to read the kernel hostname", ex);
+        }
+        if (unqualified(name).isEmpty()) {
+            try {
+                name = InetAddress.getLocalHost().getHostName();
+            } catch (IOException | RuntimeException ex) {
+                logger.debug("Unable to look up the hostname", ex);
+            }
+        }
+        String host = unqualified(name);
+        return host.isEmpty() ? DEFAULT_UNIT_ID : host;
+    }
+
+    /** The hostname up to the first dot, or "" if there isn't one. */
+    static String unqualified(String name) {
+        if (name == null) {
+            return "";
+        }
+        String n = name.strip();
+        int dot = n.indexOf('.');
+        return (dot >= 0 ? n.substring(0, dot) : n).strip();
+    }
+
+    /** The first IPv4 address on an interface that is up, for the log. */
+    private static String localIP() {
+        try {
+            for (NetworkInterface ni : NetworkInterface.networkInterfaces().toList()) {
+                if (ni.isUp() && !ni.isLoopback() && ni.getHardwareAddress() != null) {
+                    for (InetAddress a : ni.inetAddresses().toList()) {
+                        if (a.getAddress().length == 4) {
+                            return a.getHostAddress();
+                        }
+                    }
+                }
+            }
+        } catch (SocketException ex) {
+            logger.debug("Unable to list the network interfaces", ex);
+        }
+        return "UNKNOWN";
     }
 }

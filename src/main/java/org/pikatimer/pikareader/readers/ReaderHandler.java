@@ -17,6 +17,7 @@
 package org.pikatimer.pikareader.readers;
 
 import org.pikatimer.pikareader.conf.PikaConfig;
+import org.pikatimer.pikareader.conf.PikaState;
 import org.pikatimer.pikareader.readers.profiles.ProfileManager;
 import org.pikatimer.pikareader.readers.profiles.ReaderProfile;
 import org.pikatimer.pikareader.status.StatusHandler;
@@ -55,9 +56,9 @@ public class ReaderHandler {
     private volatile Boolean isReading = false;
 
     /**
-     * "Reader" config key: true while the user wants the readers reading
-     * (/start), false after /stop. Saved so that a restart after a power
-     * loss or a crash goes back to reading.
+     * State file key (PikaState): true while the user wants the readers
+     * reading (/start), false after /stop. Saved so that a restart after a
+     * power loss or a crash goes back to reading.
      */
     public static final String READING_KEY = "Reading";
 
@@ -113,6 +114,14 @@ public class ReaderHandler {
             readerConfig.put("Readers", defaultReaders);
 
             pikaConfig.putObject("Reader", readerConfig);
+        }
+
+        // The profile and reading state moved to the state file
+        for (String key : List.of(ProfileManager.PROFILE_KEY, READING_KEY)) {
+            if (readerConfig.has(key)) {
+                logger.warn("\"{}\" in the \"Reader\" config is no longer used and is ignored: PikaReader keeps it in {}",
+                        key, pikaConfig.getStatePath());
+            }
         }
 
         // Each profile now sets its own read filter
@@ -207,7 +216,7 @@ public class ReaderHandler {
      * (power loss, crash, restart). Called once at startup.
      */
     public void resumeReading() {
-        if (readerConfig.optBoolean(READING_KEY, false)) {
+        if (PikaState.getInstance().getBoolean(READING_KEY, false)) {
             logger.info("The readers were reading when PikaReader last stopped. Resuming reading.");
             startReading();
         }
@@ -227,10 +236,8 @@ public class ReaderHandler {
     }
 
     private void saveReadingState(boolean reading) {
-        if (readerConfig.optBoolean(READING_KEY, false) != reading) {
-            readerConfig.put(READING_KEY, reading);
-            pikaConfig.putObject("Reader", readerConfig);
-        }
+        // Only written when it changes
+        PikaState.getInstance().put(READING_KEY, reading);
     }
 
     /**

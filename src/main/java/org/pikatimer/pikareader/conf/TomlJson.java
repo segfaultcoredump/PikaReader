@@ -46,7 +46,7 @@ import org.json.JSONObject;
  *
  * The parsed TOML document is kept around and updated in place on each save
  * ({@link #merge}), so the comments and key order in the file survive the
- * rewrites PikaReader does on its own (UnitIP, Profile, Reading, ...).
+ * rewrites PikaReader does on its own (filling in UnitID, DB Path, ...).
  *
  * Keys are always handled as single path elements, never as dotted paths, so
  * a key such as "1.5" is not split.

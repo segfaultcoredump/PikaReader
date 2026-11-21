@@ -1,17 +1,16 @@
 # PikaReader config file. See README.md and "Gory Details.md" for every option.
 # Stop PikaReader before editing this file and start it again afterwards.
-# PikaReader also saves its own changes here (UnitIP, Profile, Reading, ...).
-# Comments on the lines above a setting are kept when it does.
+# PikaReader only writes to this file to fill in a missing setting (such as
+# UnitID on the first run). Comments on the lines above a setting are kept.
+# The reader profile and whether the readers are reading are kept in
+# .PikaReaderState.toml, next to this file.
 #
 # The config file version. Set by PikaReader.
 Version = "1.0"
 
-# The name this unit reports to the timing app. Left blank, PikaReader uses
-# the end of the network card's MAC address.
+# The name this unit reports to the timing app. Left blank, PikaReader fills
+# in the computer's hostname (without .local) on the first start.
 UnitID = ""
-
-# This unit's IP address. Set by PikaReader each time it starts.
-UnitIP = ""
 
 # AUTO uses the system timezone. Or set a zone ID such as "America/Chicago",
 # or an offset such as "-06:00".
@@ -35,11 +34,9 @@ Retention = 180
 
 # Add one [[Reader.Readers]] section per reader, each with a unique Index.
 # Type is IMPINJ or ZEBRA. Everything except Index, Type and IP is optional.
+# The reader profile (start_mats, finish_mats, ...) is picked in the web UI
+# and saved in .PikaReaderState.toml.
 [Reader]
-# The reader profile: start_mats, start_side_panels, finish_mats,
-# finish_side_panels or split_side_panels. Can be changed in the web UI.
-Profile = "finish_mats"
-
 # "Auto" uses the region each reader reports. Or fcc, global_other, etsi_lb,
 # etsi_hb or japan.
 Region = "Auto"

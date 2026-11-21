@@ -78,7 +78,7 @@ Websocket (ws://)
 - `/events` -- send a message for each read or status update
 
 ## Reader Profiles
-A profile optimizes the reader configuration for a particular situation (start, finish, side panels, etc).  Pick one from the Reader Profile list in the web UI (you'll be asked to confirm) or with `PUT /profile/<profile>`. The profile can only be changed while the readers are stopped. The choice is saved in the config file, so it is kept across restarts.
+A profile optimizes the reader configuration for a particular situation (start, finish, side panels, etc).  Pick one from the Reader Profile list in the web UI (you'll be asked to confirm) or with `PUT /profile/<profile>`. The profile can only be changed while the readers are stopped. The choice is saved in `.PikaReaderState.toml` (next to the config file), so it is kept across restarts.
 
 | Profile | Use | Tag Population |
 | --- | --- | --- |
@@ -109,7 +109,8 @@ A new log file is started each time PikaReader runs, and the logs from the last 
 ## Notice!
 The first time the app is run, it will automatically create a basic config file. 
 You will need to quit PikaReader and then edit the `~/.PikaReader.toml` file to configure the app (use `-DCONFIG=/path/to/file.toml` to keep it somewhere else). 
-The file is [TOML](https://toml.io), and each setting has a comment explaining it. PikaReader saves some settings back to the file itself (the reader profile, whether it is reading, the unit's IP address); comments on the lines above a setting are kept when it does. 
+The file is [TOML](https://toml.io), and each setting has a comment explaining it. PikaReader only writes to it to fill in a missing setting, such as the `UnitID` (the computer's hostname without `.local`, e.g. `pr4-01`) on the first run; comments on the lines above a setting are kept when it does. 
+The settings that change while PikaReader runs (the reader profile, and whether the readers are reading) are kept in a separate small file, `.PikaReaderState.toml`, in the same folder as the config file. Units are often powered off without a shutdown, so this keeps the config from being rewritten on every start and stop. If the state file is ever damaged, PikaReader logs an error and starts on the default profile, not reading. 
 If the file has a mistake in it, PikaReader logs the error and the line number, and exits. 
 Once this is done you can restart the app and begin using it. 
 
@@ -132,7 +133,7 @@ java -XX:+UseSerialGC \
     - 384m if several timing clients rewind a large day of reads at the same time. A full-day `/rewind` is the biggest short-term use of memory.
 - **`-Xms` equal to `-Xmx`, plus `-XX:+AlwaysPreTouch`:** the whole heap is set up at startup, not in the middle of a race.
 - **The metaspace, code cache and direct memory limits** keep the total memory use of the process predictable, at about 350–450 MB at most.
-- **`-XX:+ExitOnOutOfMemoryError`:** the JVM exits instead of carrying on with a broken thread. Run PikaReader under a service manager that restarts it, such as the systemd unit below. PikaReader remembers whether the readers were reading (`Reading` in the `[Reader]` section of the config, set by `/start` and `/stop`). After a crash, power loss or restart it goes back to reading, and keeps retrying any reader that is still booting until it starts.
+- **`-XX:+ExitOnOutOfMemoryError`:** the JVM exits instead of carrying on with a broken thread. Run PikaReader under a service manager that restarts it, such as the systemd unit below. PikaReader remembers whether the readers were reading (`Reading` in `.PikaReaderState.toml`, set by `/start` and `/stop`). After a crash, power loss or restart it goes back to reading, and keeps retrying any reader that is still booting until it starts.
 - **GC log:** the `-Xlog:gc*` option keeps a small rotating GC log. Create `/var/log/pikareader` first, or point the option at another directory. Leave the option out if you don't want the log.
 - **Java 25 or newer:** also add `-XX:+UseCompactObjectHeaders` for about 10–20% less heap use.
 

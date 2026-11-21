@@ -17,6 +17,7 @@
 package org.pikatimer.pikareader.readers.profiles;
 
 import org.pikatimer.pikareader.conf.PikaConfig;
+import org.pikatimer.pikareader.conf.PikaState;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -38,9 +39,9 @@ import org.slf4j.LoggerFactory;
  * Reader profiles (Start Mats, Finish Panels, ...).
  *
  * The profile data lives in the reader-profiles.json resource. One profile is
- * selected at a time for every reader. It is stored in the config as
- * "Reader" → "Profile", and each reader entry can override a profile's
- * settings in its "Profiles" object.
+ * selected at a time for every reader. It is saved in the state file
+ * (PikaState, "Profile"), not the config, and each reader entry in the config
+ * can override a profile's settings in its "Profiles" object.
  *
  * This class only reads the config and the resource, so the reader drivers
  * can use it from their own connect threads while the ReaderHandler is still
@@ -54,6 +55,9 @@ public class ProfileManager {
 
     private static final String RESOURCE = "/reader-profiles.json";
     private static final String FALLBACK_PROFILE = "finish_mats";
+
+    /** The state file key that holds the selected profile's id */
+    public static final String PROFILE_KEY = "Profile";
 
     /**
      * The region families used by reader-profiles.json, as set with
@@ -98,26 +102,27 @@ public class ProfileManager {
 
         JSONObject readerConfig = pikaConfig.getKey("Reader");
 
-        // The selected profile. Saved so a restart keeps it.
-        String saved = readerConfig.optString("Profile", "");
+        // The selected profile. Saved in the state file so a restart keeps it.
+        String saved = PikaState.getInstance().getString(PROFILE_KEY, "");
         String fallback = catalog.optString("default_profile", FALLBACK_PROFILE);
         ReaderProfile p = find(saved).orElse(null);
         if (p == null) {
             if (!saved.isBlank()) {
-                logger.warn("Unknown reader profile '{}' in the config. Using {}. Profiles: {}", saved, fallback,
+                logger.warn("Unknown reader profile '{}' in the state file. Using {}. Profiles: {}", saved, fallback,
                         profiles.stream().map(ReaderProfile::id).toList());
             }
             p = find(fallback).orElse(profiles.getFirst());
         }
         current = p;
         if (!p.id().equals(saved)) {
-            saveSetting("Profile", p.id());
+            PikaState.getInstance().put(PROFILE_KEY, p.id());
         }
 
         // The radio region family, or "Auto" to use the one the reader reports
         String region = readerConfig.optString("Region", "");
         if (region.isBlank()) {
-            saveSetting("Region", "Auto");
+            readerConfig.put("Region", "Auto");
+            pikaConfig.putObject("Reader", readerConfig);
             region = "Auto";
         }
         configuredRegion = parseRegion(region);
@@ -138,12 +143,6 @@ public class ProfileManager {
             logger.error("Unable to load the reader profiles from {}", RESOURCE, ex);
             throw new IllegalStateException("Unable to load " + RESOURCE, ex);
         }
-    }
-
-    private void saveSetting(String key, String value) {
-        JSONObject readerConfig = pikaConfig.getKey("Reader");
-        readerConfig.put(key, value);
-        pikaConfig.putObject("Reader", readerConfig);
     }
 
     private static String parseRegion(String s) {
@@ -175,7 +174,7 @@ public class ProfileManager {
     }
 
     /**
-     * Select a profile and save it in the config. This does not touch the
+     * Select a profile and save it in the state file. This does not touch the
      * readers; see ReaderHandler.setProfile().
      */
     public synchronized void setCurrent(ReaderProfile profile) {
@@ -184,7 +183,7 @@ public class ProfileManager {
         }
         logger.info("Reader profile changed from {} to {}", current, profile);
         current = profile;
-        saveSetting("Profile", profile.id());
+        PikaState.getInstance().put(PROFILE_KEY, profile.id());
     }
 
     /**

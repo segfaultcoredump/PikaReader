@@ -150,7 +150,12 @@ class TomlJsonTest {
             CommentedConfig doc = TomlJson.parse(new InputStreamReader(in, StandardCharsets.UTF_8));
             JSONObject json = TomlJson.toJson(doc);
             JSONObject reader = json.getJSONObject("Reader");
-            assertEquals("finish_mats", reader.getString("Profile"));
+            // Runtime state lives in the state file, not the config
+            assertFalse(reader.has("Profile"));
+            assertFalse(reader.has("Reading"));
+            assertFalse(json.has("UnitIP"));
+            assertEquals("", json.getString("UnitID"));
+            assertEquals("Auto", reader.getString("Region"));
             JSONObject first = reader.getJSONArray("Readers").getJSONObject(0);
             assertEquals(1, first.getInt("Index"));
             assertEquals("IMPINJ", first.getString("Type"));
@@ -158,9 +163,10 @@ class TomlJsonTest {
             assertEquals(180, json.getJSONObject("DB").getInt("Retention"));
 
             // A save keeps the template's comments
-            TomlJson.merge(doc, json.put("UnitIP", "10.0.0.5"));
+            TomlJson.merge(doc, json.put("UnitID", "pr4-01"));
             String out = write(doc);
-            assertTrue(out.contains("# The reader profile"), out);
+            assertTrue(out.contains("# The name this unit reports"), out);
+            assertTrue(out.contains("UnitID = \"pr4-01\""), out);
         }
     }
 }
