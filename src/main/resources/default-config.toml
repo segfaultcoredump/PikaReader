@@ -1,4 +1,6 @@
 # PikaReader config file. See README.md and "Gory Details.md" for every option.
+# The basic settings and the readers can also be changed on the web UI's
+# Settings page (http://<this unit>:8080/settings/).
 # Stop PikaReader before editing this file and start it again afterwards.
 # PikaReader only writes to this file to fill in a missing setting (such as
 # UnitID on the first run). Comments on the lines above a setting are kept.

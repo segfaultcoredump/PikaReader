@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<!--
+Copyright (C) 2026 John Garner <segfaultcoredump@gmail.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+<html lang="en">
+    <head>
+        <title>PikaReader Settings</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link href="/css/bootstrap-5.3.2.min.css" rel="stylesheet" >
+    </head>
+
+    <body>
+        <!-- Bootstrap Bundle with Popper -->
+        <script src="/js/bootstrap.bundle-5.3.2.min.js" ></script>
+        <div class="container py-3" style="max-width: 960px">
+
+            <div class="row">
+                <div class="col text-center">
+                    <h1 class="display-5">Settings</h1>
+                    <div class="text-body-secondary">Changes are saved to the config file and take effect when PikaReader is restarted.</div>
+                </div>
+            </div>
+
+            <div id="restartBanner" class="alert alert-warning mt-3 d-none" role="alert">
+                Settings have been changed. Restart PikaReader to apply them.
+            </div>
+            <div id="readingBanner" class="alert alert-info mt-3 d-none" role="alert">
+                The reader is reading. Stop the reader to change the settings.
+            </div>
+            <div id="result" class="mt-3"></div>
+
+            <form id="settingsForm" class="mt-3" novalidate onsubmit="saveSettings(event)">
+                <fieldset id="settingsFields" disabled>
+
+                    <!-- General -->
+                    <div class="card mb-3">
+                        <div class="card-header fw-bold">General</div>
+                        <div class="card-body row g-3">
+                            <div class="col-md-6">
+                                <label for="unitID" class="form-label">Unit ID</label>
+                                <input type="text" class="form-control" id="unitID" maxlength="64" required>
+                                <div class="form-text">The name this unit reports to the timing app. No spaces.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="timezone" class="form-label">Timezone</label>
+                                <input type="text" class="form-control" id="timezone" list="timezoneList" required>
+                                <datalist id="timezoneList"></datalist>
+                                <div class="form-text">AUTO uses the system timezone. Or a zone such as America/Chicago, or an offset such as -06:00.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="chipFormat" class="form-label">Chip Format</label>
+                                <select class="form-select" id="chipFormat"></select>
+                                <div class="form-text">How tag chips are reported.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="port" class="form-label">Web Port</label>
+                                <input type="number" class="form-control" id="port" min="1" max="65535" step="1" required>
+                                <div class="form-text">The port for this web page and the timing app's connection.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reading -->
+                    <div class="card mb-3">
+                        <div class="card-header fw-bold">Reading</div>
+                        <div class="card-body row g-3">
+                            <div class="col-md-4">
+                                <label for="region" class="form-label">Region</label>
+                                <select class="form-select" id="region"></select>
+                                <div class="form-text">Auto uses the region each reader reports.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="gatingStyle" class="form-label">Gating Style</label>
+                                <select class="form-select" id="gatingStyle"></select>
+                                <div class="form-text">How reads are de-duplicated: per reader, box or antenna.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="finishMatsGating" class="form-label">Finish Mats Gating (s)</label>
+                                <input type="number" class="form-control" id="finishMatsGating" min="0.1" step="0.1" placeholder="2 (default)">
+                                <div class="form-text">The Finish Mats read window. Leave blank for the default.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Readers -->
+                    <div class="card mb-3">
+                        <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                            <span>Readers</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addReader()">+ Add Reader</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="readers"></div>
+                            <div class="form-text">Other reader settings (TLS, port, antenna config, profile overrides) are kept as they are in the config file.</div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2 justify-content-center mb-3">
+                        <button type="submit" class="btn btn-success btn-lg px-5" id="saveButton">Save</button>
+                        <button type="button" class="btn btn-outline-secondary btn-lg" onclick="loadSettings()">Revert</button>
+                    </div>
+                </fieldset>
+            </form>
+
+            <div class="text-center">
+                <a href="/" class="btn btn-primary btn-lg p-2" role="button">Home</a>
+                <div><hr></div>
+                <div class="p-1 text-center" id="connectionStatus"></div>
+            </div>
+        </div>
+
+        <script>
+            var base = window.location.protocol + "//" + window.location.host;
+            var choices = {};       // the lists from GET /config
+            var loaded = null;      // the settings as last loaded or saved
+            var reading = false;
+
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+            }
+
+            // Fill a select with the choices, plus the current value if it
+            // isn't one of them (e.g. a dBm power level set by hand)
+            function fillSelect(select, options, value) {
+                select.innerHTML = "";
+                var all = options.slice();
+                if (value !== undefined && value !== null && value !== "" && all.indexOf(String(value)) < 0) {
+                    all.push(String(value));
+                }
+                all.forEach(function (o) {
+                    var option = document.createElement("option");
+                    option.value = o;
+                    option.textContent = options.indexOf(o) < 0 ? o + " (from config file)" : o;
+                    select.appendChild(option);
+                });
+                if (value !== undefined && value !== null && value !== "") {
+                    select.value = String(value);
+                }
+            }
+
+            function labeled(label, control, cls) {
+                var col = document.createElement("div");
+                col.className = cls;
+                var l = document.createElement("label");
+                l.className = "form-label small mb-1";
+                l.textContent = label;
+                col.appendChild(l);
+                col.appendChild(control);
+                return col;
+            }
+
+            function readerRow(r) {
+                var row = document.createElement("div");
+                row.className = "row g-2 align-items-end border-bottom pb-3 mb-3 reader";
+                row.dataset.index = r.Index;
+
+                var badge = document.createElement("div");
+                badge.className = "form-control-plaintext fw-bold";
+                badge.textContent = "#" + r.Index;
+                row.appendChild(labeled("Index", badge, "col-2 col-md-1"));
+
+                var type = document.createElement("select");
+                type.className = "form-select reader-type";
+                fillSelect(type, choices.readerTypes, r.Type);
+                row.appendChild(labeled("Type", type, "col-10 col-md-2"));
+
+                var ip = document.createElement("input");
+                ip.type = "text";
+                ip.className = "form-control reader-ip";
+                ip.value = r.IP || "";
+                ip.placeholder = "192.168.1.100";
+                ip.required = true;
+                row.appendChild(labeled("IP Address", ip, "col-12 col-md-3"));
+
+                var power = document.createElement("select");
+                power.className = "form-select reader-power";
+                fillSelect(power, choices.powerLevels, r["Power Level"]);
+                row.appendChild(labeled("Power Level", power, "col-4 col-md-2"));
+
+                var clock = document.createElement("select");
+                clock.className = "form-select reader-clock";
+                fillSelect(clock, choices.clocks, r.Clock);
+                clock.title = "Local: PikaReader keeps the reader's clock in step with this unit's clock. NTP: the reader keeps its own time with NTP.";
+                row.appendChild(labeled("Clock", clock, "col-4 col-md-2"));
+
+                var remove = document.createElement("button");
+                remove.type = "button";
+                remove.className = "btn btn-outline-danger w-100 px-1";
+                remove.title = "Remove reader " + r.Index;
+                remove.textContent = "Remove";
+                remove.onclick = function () {
+                    row.remove();
+                    updateRemoveButtons();
+                };
+                row.appendChild(labeled("", remove, "col-4 col-md-2"));
+                return row;
+            }
+
+            // Keep at least one reader
+            function updateRemoveButtons() {
+                var rows = document.querySelectorAll("#readers .reader");
+                rows.forEach(function (row) {
+                    row.querySelector(".btn-outline-danger").disabled = rows.length <= 1;
+                });
+            }
+
+            function addReader() {
+                var max = 0;
+                document.querySelectorAll("#readers .reader").forEach(function (row) {
+                    max = Math.max(max, parseInt(row.dataset.index, 10) || 0);
+                });
+                var type = choices.readerTypes.indexOf("IMPINJ") >= 0 ? "IMPINJ" : choices.readerTypes[0];
+                var row = readerRow({Index: max + 1, Type: type, IP: "", "Power Level": "High", Clock: "Local"});
+                document.getElementById("readers").appendChild(row);
+                updateRemoveButtons();
+                row.querySelector(".reader-ip").focus();
+            }
+
+            function showSettings(data) {
+                choices = data;
+                loaded = data.settings;
+                var s = data.settings;
+                document.getElementById("unitID").value = s.UnitID;
+                document.getElementById("timezone").value = s.Timezone;
+                fillSelect(document.getElementById("chipFormat"), data.chipFormats, s.ChipFormat);
+                document.getElementById("port").value = s.Port;
+                fillSelect(document.getElementById("region"), data.regions, s.Region);
+                fillSelect(document.getElementById("gatingStyle"), data.gatingStyles, s["Gating Style"]);
+                document.getElementById("finishMatsGating").value = s["Finish Mats Gating"];
+
+                var readers = document.getElementById("readers");
+                readers.innerHTML = "";
+                s.Readers.forEach(function (r) {
+                    readers.appendChild(readerRow(r));
+                });
+                updateRemoveButtons();
+
+                document.getElementById("restartBanner").classList.toggle("d-none", !data.restartPending);
+                setReading(data.reading);
+            }
+
+            function setReading(r) {
+                reading = r;
+                document.getElementById("readingBanner").classList.toggle("d-none", !reading);
+                document.getElementById("settingsFields").disabled = reading || loaded === null;
+            }
+
+            function loadSettings() {
+                document.getElementById("result").innerHTML = "";
+                fetch(base + "/config")
+                        .then((response) => response.json())
+                        .then(showSettings)
+                        .catch((error) => showResult("danger", "Unable to load the settings: " + escapeHtml(error)));
+            }
+
+            function gather() {
+                var finish = document.getElementById("finishMatsGating").value.trim();
+                var readers = [];
+                document.querySelectorAll("#readers .reader").forEach(function (row) {
+                    readers.push({
+                        "Index": parseInt(row.dataset.index, 10),
+                        "Type": row.querySelector(".reader-type").value,
+                        "IP": row.querySelector(".reader-ip").value.trim(),
+                        "Power Level": row.querySelector(".reader-power").value,
+                        "Clock": row.querySelector(".reader-clock").value
+                    });
+                });
+                var port = document.getElementById("port").value.trim();
+                return {
+                    "UnitID": document.getElementById("unitID").value.trim(),
+                    "Timezone": document.getElementById("timezone").value.trim(),
+                    "ChipFormat": document.getElementById("chipFormat").value,
+                    "Port": port === "" ? null : Number(port),
+                    "Region": document.getElementById("region").value,
+                    "Gating Style": document.getElementById("gatingStyle").value,
+                    "Finish Mats Gating": finish === "" ? "" : Number(finish),
+                    "Readers": readers
+                };
+            }
+
+            function showResult(kind, html) {
+                document.getElementById("result").innerHTML =
+                        '<div class="alert alert-' + kind + '" role="alert">' + html + "</div>";
+                window.scrollTo({top: 0, behavior: "smooth"});
+            }
+
+            function saveSettings(event) {
+                event.preventDefault();
+                var settings = gather();
+                var oldPort = loaded ? loaded.Port : null;
+                var saveButton = document.getElementById("saveButton");
+                saveButton.disabled = true;
+                fetch(base + "/config", {
+                    method: "PUT",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(settings)
+                })
+                        .then((response) => response.json().then((data) => ({ok: response.ok, data: data})))
+                        .then((result) => {
+                            if (result.ok) {
+                                showSettings(result.data);
+                                var html = "<b>Saved</b> at " + escapeHtml(result.data.timestamp) +
+                                        ". Restart PikaReader to apply the changes.";
+                                if (String(settings.Port) !== String(oldPort)) {
+                                    var url = window.location.protocol + "//" + window.location.hostname + ":" + settings.Port + "/";
+                                    html += "<br>After the restart this page will be at <a href=\"" + escapeHtml(url) + "\">" + escapeHtml(url) + "</a>.";
+                                }
+                                showResult("success", html);
+                            } else {
+                                var errors = result.data.errors || [result.data.error || "Unknown error"];
+                                showResult("danger", "<b>Not saved:</b><ul class=\"mb-0\">" +
+                                        errors.map((e) => "<li>" + escapeHtml(e) + "</li>").join("") + "</ul>");
+                            }
+                        })
+                        .catch((error) => showResult("danger", "Unable to save the settings: " + escapeHtml(error)))
+                        .finally(() => {
+                            saveButton.disabled = false;
+                        });
+            }
+
+            // A few common zones for the timezone box. Any zone ID works.
+            ["AUTO", "America/New_York", "America/Chicago", "America/Denver", "America/Phoenix",
+                "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu", "UTC",
+                "Europe/London", "Europe/Paris", "Australia/Sydney"].forEach(function (z) {
+                var option = document.createElement("option");
+                option.value = z;
+                document.getElementById("timezoneList").appendChild(option);
+            });
+
+            // Follow the reading state, like the main page
+            var connectionStatus = document.getElementById("connectionStatus");
+            var webSocket = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/status");
+            webSocket.onmessage = function (message) {
+                var status = JSON.parse(message.data);
+                if (status.type === "STATUS") {
+                    if (status.reading !== reading) {
+                        setReading(status.reading);
+                    }
+                    connectionStatus.textContent = "Connected";
+                }
+            };
+            webSocket.onclose = function () {
+                connectionStatus.textContent = "Disconnected";
+            };
+
+            loadSettings();
+        </script>
+    </body>
+</html>

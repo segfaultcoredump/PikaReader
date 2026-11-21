@@ -31,7 +31,9 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.temporal.Temporal;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -167,6 +169,24 @@ final class TomlJson {
         }
     }
 
+    private static boolean hasIndex(Object j) {
+        return j instanceof JSONObject o && o.opt("Index") instanceof Number;
+    }
+
+    /** The table in the old list with the same "Index" as j, if j has one. */
+    private static Object tableWithIndex(List<?> old, Object j, Set<Object> used) {
+        if (!hasIndex(j)) {
+            return null;
+        }
+        long index = ((Number) ((JSONObject) j).get("Index")).longValue();
+        for (Object o : old) {
+            if (!used.contains(o) && o instanceof UnmodifiableConfig c && c.valueMap().get("Index") instanceof Number n && n.longValue() == index) {
+                return o;
+            }
+        }
+        return null;
+    }
+
     private static Object toTomlValue(Config parent, Object current, Object j) {
         return switch (j) {
             case JSONObject o -> {
@@ -177,12 +197,20 @@ final class TomlJson {
             case JSONArray a -> {
                 List<?> old = current instanceof List<?> l ? l : List.of();
                 List<Object> list = new ArrayList<>(a.length());
+                Set<Object> used = Collections.newSetFromMap(new IdentityHashMap<>());
                 for (int i = 0; i < a.length(); i++) {
                     if (a.isNull(i)) {
                         continue;
                     }
-                    // Reuse the table at the same position so its comments stay
-                    Object prev = i < old.size() ? old.get(i) : null;
+                    // Reuse the old table so its comments stay: the one with
+                    // the same Index (a reader), else the one at this position
+                    Object prev = tableWithIndex(old, a.get(i), used);
+                    if (prev == null && !hasIndex(a.get(i)) && i < old.size() && !used.contains(old.get(i))) {
+                        prev = old.get(i);
+                    }
+                    if (prev != null) {
+                        used.add(prev);
+                    }
                     list.add(toTomlValue(parent, prev, a.get(i)));
                 }
                 yield list;

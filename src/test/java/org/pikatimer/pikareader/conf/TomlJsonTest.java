@@ -169,4 +169,34 @@ class TomlJsonTest {
             assertTrue(out.contains("UnitID = \"pr4-01\""), out);
         }
     }
+
+    @Test
+    void removingAReaderKeepsTheOtherReadersComments() {
+        String toml = """
+                [Reader]
+                [[Reader.Readers]]
+                Index = 1
+                Type = "IMPINJ"
+                # first reader's power
+                "Power Level" = "Low"
+
+                [[Reader.Readers]]
+                Index = 2
+                Type = "ZEBRA"
+                # second reader's power
+                "Power Level" = "High"
+                """;
+        CommentedConfig doc = TomlJson.parse(new StringReader(toml));
+        JSONObject json = TomlJson.toJson(doc);
+        JSONArray readers = json.getJSONObject("Reader").getJSONArray("Readers");
+        readers.remove(0);
+
+        TomlJson.merge(doc, json);
+        String out = write(doc);
+
+        assertFalse(out.contains("first reader's power"), out);
+        assertTrue(out.contains("# second reader's power"), out);
+        assertTrue(out.indexOf("# second reader's power") < out.indexOf("\"Power Level\" = \"High\""), out);
+        assertTrue(json.similar(TomlJson.toJson(TomlJson.parse(new StringReader(out)))), out);
+    }
 }

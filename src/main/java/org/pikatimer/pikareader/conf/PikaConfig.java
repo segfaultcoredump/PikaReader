@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -71,6 +72,12 @@ public class PikaConfig {
     private final File configFile = new File(System.getProperty("CONFIG", System.getProperty("user.home") + "/.PikaReader.toml"));
     
     ZoneId zoneId = ZoneId.systemDefault();
+
+    /** A "Timezone" of whole hours, such as "-6" or "+10" */
+    private static final Pattern OFFSET_HOURS = Pattern.compile("[+-]\\d+");
+
+    /** Set once the web UI has changed the settings, until the next restart */
+    private volatile boolean restartPending = false;
 
     /**
      * SingletonHolder is loaded on the first execution of
@@ -161,15 +168,7 @@ public class PikaConfig {
         
         // Now let's translate what the timezone value is into a ZoneID
         try {
-            Pattern pattern = Pattern.compile("[+-]\\d+");
-            zoneId = switch (getStringValue("Timezone").toUpperCase()) {
-                case "", "AUTO" ->
-                    ZoneId.systemDefault();
-                case String s when pattern.matcher(s).matches() ->
-                    ZoneId.ofOffset("UTC", ZoneOffset.of(getStringValue("Timezone")));
-                default ->
-                    ZoneId.of(getStringValue("Timezone"));
-            };
+            zoneId = parseTimezone(getStringValue("Timezone"));
         } catch (Exception e) {
             logger.error("Unable to parse timezone {}, falling back to {}", getStringValue("Timezone"), zoneId.toString());
         }
@@ -187,6 +186,40 @@ public class PikaConfig {
         }
 
         logger.trace("Exiting PikaConfig::loadConfig()");
+    }
+
+    /**
+     * The zone for a "Timezone" setting: "AUTO" (or blank) for the system
+     * timezone, an offset such as "-6" or "-06:00", or a zone ID such as
+     * "America/Chicago".
+     *
+     * @throws java.time.DateTimeException if it is none of those
+     */
+    static ZoneId parseTimezone(String timezone) {
+        String tz = timezone == null ? "" : timezone.strip();
+        return switch (tz.toUpperCase()) {
+            case "", "AUTO" ->
+                ZoneId.systemDefault();
+            case String s when OFFSET_HOURS.matcher(s).matches() ->
+                ZoneId.ofOffset("UTC", ZoneOffset.of(tz));
+            default ->
+                ZoneId.of(tz);
+        };
+    }
+
+    /**
+     * Change several settings and save the file once. Used by the web UI's
+     * settings page; the changes take effect when PikaReader restarts.
+     */
+    public synchronized void edit(Consumer<JSONObject> change) {
+        change.accept(configRoot);
+        restartPending = true;
+        saveConfig();
+    }
+
+    /** True once the settings have been changed since PikaReader started. */
+    public boolean isRestartPending() {
+        return restartPending;
     }
 
     private synchronized void saveConfig() {

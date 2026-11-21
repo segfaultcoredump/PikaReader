@@ -311,6 +311,11 @@ public class ReaderHandler {
         return readers.values();
     }
 
+    /** The reader "Type"s there is a driver for, e.g. IMPINJ and ZEBRA. */
+    public Set<String> getReaderTypes() {
+        return Set.copyOf(rfidReaderFactory.keySet());
+    }
+
     /**
      * Select a reader profile, save it in the config and re-apply every
      * reader's settings. Only allowed while the readers are not reading.

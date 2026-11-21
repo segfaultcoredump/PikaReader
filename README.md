@@ -59,6 +59,7 @@ You can use the web based UI to start or Stop the reader or create a "trigger" t
 HTTP paths for basic system status and information
 - `/` -- Basic System information and web UI for control of PikaReader 
 - `/antennaStatus` -- Show the current antenna port stats
+- `/settings` -- Change the basic settings and the list of readers (see below)
 
 REST api paths:
 - `/start` -- Start the reader
@@ -72,6 +73,8 @@ REST api paths:
 - `/profiles` -- list the reader profiles and the current one
 - `/profile` -- the current reader profile and the settings each reader is using for it
 - `PUT /profile/<profile>` -- change the reader profile, by id or name (e.g. `curl -X PUT http://<pikareader>:8080/profile/start_mats`). Returns `409` while the readers are reading and `404` for an unknown profile.
+- `/config` -- the basic settings the Settings page edits, and the choices for each one
+- `PUT /config` -- save the basic settings (a JSON body like the `settings` from `/config`). Returns `400` with a list of `errors` for a bad setting and `409` while the readers are reading. The changes take effect when PikaReader restarts.
 
 Websocket (ws://)
 - `/status` -- sends a message once a second with the current reader status
@@ -108,7 +111,8 @@ A new log file is started each time PikaReader runs, and the logs from the last 
 
 ## Notice!
 The first time the app is run, it will automatically create a basic config file. 
-You will need to quit PikaReader and then edit the `~/.PikaReader.toml` file to configure the app (use `-DCONFIG=/path/to/file.toml` to keep it somewhere else). 
+Set it up on the web UI's Settings page (`http://<pikareader>:8080/settings/`), or quit PikaReader and edit the `~/.PikaReader.toml` file (use `-DCONFIG=/path/to/file.toml` to keep it somewhere else). 
+The Settings page covers the basics: the Unit ID, timezone, chip format, web port, region, gating style, Finish Mats gating, and the readers (add or remove readers and set each one's type, IP address, power level, and clock: Local or NTP). It can only save while the readers are stopped, and the changes take effect when PikaReader is restarted. Everything else (TLS, reader ports, antenna config, profile overrides, ...) is edited in the file, and the Settings page leaves it as it is. 
 The file is [TOML](https://toml.io), and each setting has a comment explaining it. PikaReader only writes to it to fill in a missing setting, such as the `UnitID` (the computer's hostname without `.local`, e.g. `pr4-01`) on the first run; comments on the lines above a setting are kept when it does. 
 The settings that change while PikaReader runs (the reader profile, and whether the readers are reading) are kept in a separate small file, `.PikaReaderState.toml`, in the same folder as the config file. Units are often powered off without a shutdown, so this keeps the config from being rewritten on every start and stop. If the state file is ever damaged, PikaReader logs an error and starts on the default profile, not reading. 
 If the file has a mistake in it, PikaReader logs the error and the line number, and exits. 

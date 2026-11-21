@@ -16,6 +16,7 @@
  */
 package org.pikatimer.pikareader.http;
 
+import org.pikatimer.pikareader.conf.BasicSettings;
 import org.pikatimer.pikareader.conf.PikaConfig;
 import org.pikatimer.pikareader.readers.RFIDReader;
 import org.pikatimer.pikareader.readers.ReaderHandler;
@@ -54,6 +55,7 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.eclipse.jetty.websocket.api.StatusCode;
 import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -296,7 +298,46 @@ public class HTTPHandler {
                 }
             });
 
-            // TODO: Reader config page
+            // The basic settings for the settings page (/settings/), and the
+            // choices for each one
+            javalinApp.get("/config", ctx -> {
+                ctx.json(configResponse().toString());
+            });
+
+            // Save the basic settings. They take effect when PikaReader
+            // restarts. Only allowed while the readers are not reading.
+            javalinApp.put("/config", ctx -> {
+                logger.info("HTTPD Request: PUT /config");
+                ReaderHandler readerHandler = ReaderHandler.getInstance();
+                JSONObject response = new JSONObject();
+                if (readerHandler.isReading()) {
+                    response.put("errors", new JSONArray().put("Stop the reader before changing the settings"));
+                    ctx.status(409).json(response.toString());
+                    return;
+                }
+                JSONObject settings;
+                try {
+                    settings = new JSONObject(ctx.body());
+                } catch (JSONException ex) {
+                    response.put("errors", new JSONArray().put("The settings aren't valid JSON: " + ex.getMessage()));
+                    ctx.status(400).json(response.toString());
+                    return;
+                }
+                List<String> errors = BasicSettings.validate(settings, BasicSettings.read(pikaConfig), readerHandler.getReaderTypes());
+                if (!errors.isEmpty()) {
+                    logger.info("Settings not saved: {}", errors);
+                    response.put("errors", errors);
+                    ctx.status(400).json(response.toString());
+                    return;
+                }
+                pikaConfig.edit(root -> BasicSettings.apply(root, settings));
+                logger.info("Settings saved from the web UI. Restart PikaReader to apply them.");
+                response = configResponse();
+                response.put("saved", true);
+                response.put("timestamp", LocalDateTime.now(pikaConfig.getTimezoneId()).format(formatter));
+                ctx.json(response.toString());
+            });
+
             // TODO: Uploader config page
             // TODO: Status ws for folks who don't care about the reads
             
@@ -311,6 +352,20 @@ public class HTTPHandler {
 
         logger.trace("Exiting HTTPHandler constructor");
 
+    }
+
+    private JSONObject configResponse() {
+        JSONObject response = new JSONObject();
+        response.put("settings", BasicSettings.read(pikaConfig));
+        response.put("readerTypes", ReaderHandler.getInstance().getReaderTypes().stream().sorted().toList());
+        response.put("powerLevels", BasicSettings.powerLevels());
+        response.put("clocks", BasicSettings.CLOCKS);
+        response.put("chipFormats", BasicSettings.CHIP_FORMATS);
+        response.put("regions", BasicSettings.regions());
+        response.put("gatingStyles", BasicSettings.gatingStyles());
+        response.put("reading", ReaderHandler.getInstance().isReading());
+        response.put("restartPending", pikaConfig.isRestartPending());
+        return response;
     }
 
     private JSONObject currentProfile() {
