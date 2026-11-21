@@ -74,7 +74,10 @@ public class Impinj implements RFIDReader {
     private boolean useTls = false;
     private Integer readerID;
     private Boolean reading = false;
-    private Boolean connected = false;
+    // True only once connect() has finished setting up the reader, so a
+    // connect still in progress (the SDK's isConnected() is already true
+    // then) or one that failed partway never shows as connected.
+    private volatile boolean connected = false;
     
     private Semaphore reader_command_semaphore = new Semaphore(1);
     private volatile boolean connectHintLogged = false;
@@ -115,7 +118,7 @@ public class Impinj implements RFIDReader {
     
     @Override
     public String getStatus(){
-        return reading?"Reading":reader.isConnected()?"Connected":"Disconnected";
+        return !connected ? "Disconnected" : reading ? "Reading" : "Connected";
     }
 
     @Override
@@ -395,7 +398,8 @@ public class Impinj implements RFIDReader {
 
         //reader = new ImpinjReader();
         if (!reader.isConnected() && reader_command_semaphore.tryAcquire()) {
-                
+
+            connected = false;
             try {
                 logger.info("Connecting to {}:{}{}", readerIP, readerPort, useTls ? " (TLS)" : "");
                 if (useTls) {
@@ -447,15 +451,28 @@ public class Impinj implements RFIDReader {
                 }
                 reader.disconnect();
             } catch (Exception ex) {
-                System.out.println(ex.getMessage());
                 logger.error("Impinj Connect Exception", ex);
+                // Don't leave a half set up session behind: it would block
+                // every later connect attempt
+                try {
+                    reader.disconnect();
+                } catch (Exception dex) {
+                    logger.debug("Reader {} disconnect error", readerID, dex);
+                }
             } finally {
                 reader_command_semaphore.release();
             }
         }
-        
-        return (reader != null && reader.isConnected());
 
+        return connected;
+
+    }
+
+    /**
+     * Called by the ImpinjConnectionLostListener before it reconnects.
+     */
+    void connectionLost() {
+        connected = false;
     }
 
     /**
@@ -684,17 +701,14 @@ public class Impinj implements RFIDReader {
     @Override
     public void applyProfile() {
         String name = ProfileManager.getInstance().getCurrent().name();
-        if (reading || !reader.isConnected()) {
+        if (reading || !connected) {
             logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
             return;
         }
         try {
-            // The SDK reports connected while a connect is still in progress,
-            // so this can wait for that connect to finish. It may have
-            // applied the previous profile, so apply the current one again.
             reader_command_semaphore.acquire();
             try {
-                if (reader.isConnected() && !reading) {
+                if (connected && !reading) {
                     configure();
                 } else {
                     logger.info("Reader {} will use the {} profile when it next connects", readerID, name);
