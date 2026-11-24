@@ -15,7 +15,9 @@ Version = "1.0"
 UnitID = ""
 
 # AUTO uses the system timezone. Or set a zone ID such as "America/Chicago",
-# or an offset such as "-06:00".
+# or an offset such as "-06:00". Anything other than AUTO replaces the system
+# timezone for PikaReader (read times and log times) without changing the
+# computer's own setting. Takes effect when PikaReader restarts.
 Timezone = "AUTO"
 
 # How tag chips are reported: "Decimal" or "Hex".

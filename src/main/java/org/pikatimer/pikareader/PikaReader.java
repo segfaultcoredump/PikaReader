@@ -16,6 +16,7 @@
  */
 package org.pikatimer.pikareader;
 
+import org.pikatimer.pikareader.conf.HostTimezone;
 import org.pikatimer.pikareader.conf.PikaConfig;
 import org.pikatimer.pikareader.http.HTTPHandler;
 import org.pikatimer.pikareader.readers.ReaderHandler;
@@ -36,9 +37,20 @@ import org.slf4j.LoggerFactory;
  */
 public class PikaReader {
 
-    private static final Logger logger = LoggerFactory.getLogger(PikaReader.class);
+    /**
+     * Created on first use, not when the class loads: main() has to set the
+     * default timezone before logback starts (see HostTimezone).
+     */
+    private static class Log {
+
+        private static final Logger logger = LoggerFactory.getLogger(PikaReader.class);
+    }
 
     public static void main(String[] args) {
+
+        // First, before anything logs: a Timezone other than AUTO becomes the
+        // JVM's default zone, so the log times use it too
+        HostTimezone.apply();
 
         PikaReader pr = new PikaReader();
         pr.start();
@@ -56,7 +68,7 @@ public class PikaReader {
                 p.load(in);
             }
         } catch (IOException ex) {
-            logger.debug("Unable to read pikareader-build.properties", ex);
+            Log.logger.debug("Unable to read pikareader-build.properties", ex);
         }
         return p.getProperty("version", "unknown") + " (built " + p.getProperty("built", "unknown") + ")";
     }
@@ -80,7 +92,7 @@ public class PikaReader {
                                                                                        
                                                                                                                    """);
         // Log which build is running, so a stale install is easy to spot
-        logger.info("PikaReader {}", buildInfo());
+        Log.logger.info("PikaReader {}", buildInfo());
 
         // Read Config
         PikaConfig pikaConfig = PikaConfig.getInstance();
@@ -115,7 +127,7 @@ public class PikaReader {
        
         // The JVM runs shutdown hooks on SIGINT (Ctrl-C), SIGTERM and SIGHUP
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutdown signal received. Stopping Readers...");
+            Log.logger.info("Shutdown signal received. Stopping Readers...");
             // Keeps the saved reading state, so the next start resumes
             readerHandler.shutdown();
 
@@ -126,10 +138,10 @@ public class PikaReader {
             // Write out any reads still waiting for the DB thread's next cycle
             tagDB.flush();
 
-            logger.info("Stopping Jetty");
+            Log.logger.info("Stopping Jetty");
             httpHandler.stopHTTPD();
 
-            logger.info("PikaReader Stopped...");
+            Log.logger.info("PikaReader Stopped...");
         }, "PikaReaderShutdown"));
 
         System.out.println("Press Ctrl-C (or send SIGTERM/SIGHUP) to exit.");

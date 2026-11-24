@@ -29,10 +29,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.function.Consumer;
-import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -69,12 +67,9 @@ public class PikaConfig {
      */
     private CommentedConfig document;
 
-    private final File configFile = new File(System.getProperty("CONFIG", System.getProperty("user.home") + "/.PikaReader.toml"));
+    private final File configFile = HostTimezone.configPath().toFile();
     
     ZoneId zoneId = ZoneId.systemDefault();
-
-    /** A "Timezone" of whole hours, such as "-6" or "+10" */
-    private static final Pattern OFFSET_HOURS = Pattern.compile("[+-]\\d+");
 
     /** Set once the web UI has changed the settings, until the next restart */
     private volatile boolean restartPending = false;
@@ -168,12 +163,13 @@ public class PikaConfig {
         
         // Now let's translate what the timezone value is into a ZoneID
         try {
-            zoneId = parseTimezone(getStringValue("Timezone"));
+            zoneId = HostTimezone.parse(getStringValue("Timezone"));
         } catch (Exception e) {
             logger.error("Unable to parse timezone {}, falling back to {}", getStringValue("Timezone"), zoneId.toString());
         }
 
         logger.info("PikaReader Timezone: using zoneID " + zoneId.toString() + " Offset: " + ZonedDateTime.now(zoneId).getOffset());
+        logger.info("PikaReader Timezone: {}", HostTimezone.summary());
         
         // Do they want the "chip" in hex or decimal?
         if (configRoot.optString("ChipFormat").isBlank()){
@@ -186,25 +182,6 @@ public class PikaConfig {
         }
 
         logger.trace("Exiting PikaConfig::loadConfig()");
-    }
-
-    /**
-     * The zone for a "Timezone" setting: "AUTO" (or blank) for the system
-     * timezone, an offset such as "-6" or "-06:00", or a zone ID such as
-     * "America/Chicago".
-     *
-     * @throws java.time.DateTimeException if it is none of those
-     */
-    static ZoneId parseTimezone(String timezone) {
-        String tz = timezone == null ? "" : timezone.strip();
-        return switch (tz.toUpperCase()) {
-            case "", "AUTO" ->
-                ZoneId.systemDefault();
-            case String s when OFFSET_HOURS.matcher(s).matches() ->
-                ZoneId.ofOffset("UTC", ZoneOffset.of(tz));
-            default ->
-                ZoneId.of(tz);
-        };
     }
 
     /**

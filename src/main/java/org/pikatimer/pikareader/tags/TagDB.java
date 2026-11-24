@@ -16,6 +16,7 @@
  */
 package org.pikatimer.pikareader.tags;
 
+import org.pikatimer.pikareader.conf.HostTimezone;
 import org.pikatimer.pikareader.conf.PikaConfig;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -63,9 +64,11 @@ public class TagDB {
     // Serializes file writes between the DB thread and flush()
     private final Object writeLock = new Object();
 
-    // The zone the DB folders are named in: the system timezone, which can
-    // differ from the configured Timezone that read timestamps use
-    private final ZoneId dirZone = ZoneId.systemDefault();
+    // The zone the DB folders are named in: the host's own timezone, which
+    // can differ from the configured Timezone that read timestamps use. Not
+    // ZoneId.systemDefault(): a Timezone other than AUTO replaces that, and
+    // the folders already written would then be read as the wrong hours.
+    private final ZoneId dirZone = HostTimezone.hostZone();
     // Start of the startup day (epoch ms). Every read with epochMilli from
     // here on is in tagList: today's files are loaded at startup and every
     // read since is added. Rewinds take older reads from disk.

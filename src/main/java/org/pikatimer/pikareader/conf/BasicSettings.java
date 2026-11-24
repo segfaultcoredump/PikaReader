@@ -173,7 +173,7 @@ public final class BasicSettings {
 
         String tz = in.optString(TIMEZONE).strip();
         try {
-            PikaConfig.parseTimezone(tz);
+            HostTimezone.parse(tz);
         } catch (RuntimeException ex) {
             errors.add("Unknown timezone '" + tz + "'. Use AUTO, a zone such as America/Chicago, or an offset such as -06:00");
         }
