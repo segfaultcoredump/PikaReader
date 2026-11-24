@@ -72,7 +72,7 @@ REST api paths:
     - A bad time, mixed forms, or an epoch `to` that isn't after `from` returns `400` with an `error`.
 - `/debug` -- Dump the debug log to the browser
 - `/trigger` -- Record a "trigger" time (chip = 0, reader = 0, antenna = 0) to mark an event
-- `/status` -- dump the current reader status
+- `/status` -- dump the current reader status (including the current `profile` and the list of `profiles`)
 - `/profiles` -- list the reader profiles and the current one
 - `/profile` -- the current reader profile and the settings each reader is using for it
 - `PUT /profile/<profile>` -- change the reader profile, by id or name (e.g. `curl -X PUT http://<pikareader>:8080/profile/start_mats`). Returns `409` while the readers are reading and `404` for an unknown profile.

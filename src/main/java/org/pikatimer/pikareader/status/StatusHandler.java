@@ -113,6 +113,16 @@ public class StatusHandler {
                 profileStatus.put("name", profile.name());
                 statusReport.put("profile", profileStatus);
 
+                // The profiles to pick from (id and name only, the full
+                // details are in GET /profiles). Remote clients that only
+                // see this STATUS through PikaRelay use it for their
+                // profile list.
+                JSONArray profileList = new JSONArray();
+                for (ReaderProfile p : ProfileManager.getInstance().getProfiles()) {
+                    profileList.put(new JSONObject().put("id", p.id()).put("name", p.name()));
+                }
+                statusReport.put("profiles", profileList);
+
                 logger.trace("Getting readers");
 
                 Collection<RFIDReader> readers = readerHandler.getReaders();
