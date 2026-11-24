@@ -22,6 +22,7 @@ import org.pikatimer.pikareader.readers.RFIDReader;
 import org.pikatimer.pikareader.readers.ReaderHandler;
 import org.pikatimer.pikareader.readers.profiles.ProfileManager;
 import org.pikatimer.pikareader.readers.profiles.ReaderProfile;
+import org.pikatimer.pikareader.relay.RelayClient;
 import org.pikatimer.pikareader.tags.TagRead;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -66,7 +67,8 @@ public class StatusHandler {
     private Integer totalReads = 0;
     private TagRead lastChipRead;
 
-    private JSONObject lastStatus = new JSONObject();
+    // Read by the HTTP and PikaRelay threads
+    private volatile JSONObject lastStatus = new JSONObject();
 
     public JSONObject getStatus() {
         return lastStatus;
@@ -233,6 +235,17 @@ public class StatusHandler {
                 statusReport.put("timestamp", now.toString());
                 statusReport.put("localTime", LocalDateTime.ofInstant(now, pikaConfig.getTimezoneId()).toString());
                 statusReport.put("timezone", pikaConfig.getTimezoneId().toString());
+
+                // PikaRelay connection state
+                try {
+                    statusReport.put("remote", RelayClient.getInstance().statusJSON());
+                } catch (RuntimeException ex) {
+                    logger.debug("Unable to get the PikaRelay status", ex);
+                }
+
+                // Set before it is shared, so the copy other threads see is
+                // never changed structurally afterwards
+                statusReport.put("type", "STATUS");
                 lastStatus = statusReport;
                 httpHandler.postStatus(statusReport);
                 logger.trace("Status Report: " + statusReport.toString(4));

@@ -217,6 +217,16 @@ public class PikaConfig {
         saveConfig();
     }
 
+    /**
+     * Change several settings that take effect right away (such as the
+     * [Remote] section) and save the file once. Unlike edit(), this doesn't
+     * mark a restart as pending.
+     */
+    public synchronized void editLive(Consumer<JSONObject> change) {
+        change.accept(configRoot);
+        saveConfig();
+    }
+
     /** True once the settings have been changed since PikaReader started. */
     public boolean isRestartPending() {
         return restartPending;
@@ -239,6 +249,15 @@ public class PikaConfig {
 
     public JSONObject getKey(String key) {
         return configRoot.optJSONObject(key, new JSONObject());
+    }
+
+    /**
+     * A copy of a section, taken under the config lock, for threads that read
+     * a section while the web UI may be changing it (e.g. [Remote]).
+     */
+    public synchronized JSONObject getKeyCopy(String key) {
+        JSONObject o = configRoot.optJSONObject(key);
+        return o == null ? new JSONObject() : new JSONObject(o.toString());
     }
 
     public JSONArray getArray(String key) {

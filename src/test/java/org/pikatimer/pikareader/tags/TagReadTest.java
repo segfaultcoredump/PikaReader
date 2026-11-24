@@ -107,4 +107,22 @@ class TagReadTest {
         assertEquals("[]", out.toString());
         assertEquals(new JSONArray().toString(), out.toString());
     }
+
+    @Test
+    void sortsByWhenTheReadWasTakenNotByItsLabel() {
+        // 2026-11-01 01:30 in America/Chicago happens twice: CDT, then CST
+        TagRead firstPass = read(EPC, 1, -55.0);
+        firstPass.setTimestamp(LocalDateTime.of(2026, 11, 1, 1, 30));
+        firstPass.setEpochMilli(java.time.Instant.parse("2026-11-01T06:30:00Z").toEpochMilli());
+        TagRead between = read(EPC, 1, -55.0);
+        between.setTimestamp(LocalDateTime.of(2026, 11, 1, 1, 45));
+        between.setEpochMilli(java.time.Instant.parse("2026-11-01T06:45:00Z").toEpochMilli());
+        TagRead secondPass = read(EPC, 1, -55.0);
+        secondPass.setTimestamp(LocalDateTime.of(2026, 11, 1, 1, 10));
+        secondPass.setEpochMilli(java.time.Instant.parse("2026-11-01T07:10:00Z").toEpochMilli());
+
+        List<TagRead> reads = new ArrayList<>(List.of(secondPass, between, firstPass));
+        reads.sort(null);
+        assertEquals(List.of(firstPass, between, secondPass), reads);
+    }
 }

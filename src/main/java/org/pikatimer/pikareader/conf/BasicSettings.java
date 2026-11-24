@@ -148,6 +148,16 @@ public final class BasicSettings {
      * @return what is wrong with them, empty if nothing is
      */
     public static List<String> validate(JSONObject in, JSONObject current, Set<String> readerTypes) {
+        return validate(in, current, readerTypes, false);
+    }
+
+    /**
+     * Check settings sent by the settings page.
+     *
+     * @param relayEnabled true if sending to PikaRelay is turned on, which
+     * limits the Unit ID to the characters PikaRelay allows in a reader id
+     */
+    public static List<String> validate(JSONObject in, JSONObject current, Set<String> readerTypes, boolean relayEnabled) {
         List<String> errors = new ArrayList<>();
 
         String unitId = in.optString(UNIT_ID).strip();
@@ -157,6 +167,8 @@ public final class BasicSettings {
             errors.add("The Unit ID can't contain spaces");
         } else if (unitId.length() > MAX_UNIT_ID) {
             errors.add("The Unit ID can't be longer than " + MAX_UNIT_ID + " characters");
+        } else if (relayEnabled && !RemoteSettings.RELAY_ID.matcher(unitId).matches()) {
+            errors.add(RemoteSettings.RELAY_ID_RULE);
         }
 
         String tz = in.optString(TIMEZONE).strip();

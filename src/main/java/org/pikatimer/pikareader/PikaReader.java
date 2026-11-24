@@ -19,6 +19,7 @@ package org.pikatimer.pikareader;
 import org.pikatimer.pikareader.conf.PikaConfig;
 import org.pikatimer.pikareader.http.HTTPHandler;
 import org.pikatimer.pikareader.readers.ReaderHandler;
+import org.pikatimer.pikareader.relay.RelayClient;
 import org.pikatimer.pikareader.status.StatusHandler;
 import org.pikatimer.pikareader.tags.TagDB;
 import org.pikatimer.pikareader.util.DiscoveryListener;
@@ -105,6 +106,9 @@ public class PikaReader {
         // start the status handler
         StatusHandler statusHandler = StatusHandler.getInstance();      
 
+        // Send reads and status to PikaRelay, if that is turned on
+        RelayClient relayClient = RelayClient.getInstance();
+
         // Go back to reading if the readers were reading when PikaReader last
         // stopped (power loss, crash or restart in the middle of a race)
         readerHandler.resumeReading();
@@ -114,6 +118,10 @@ public class PikaReader {
             logger.info("Shutdown signal received. Stopping Readers...");
             // Keeps the saved reading state, so the next start resumes
             readerHandler.shutdown();
+
+            // Reads still queued for PikaRelay are not kept: the timing app
+            // can ask for a rewind
+            relayClient.shutdown();
 
             // Write out any reads still waiting for the DB thread's next cycle
             tagDB.flush();

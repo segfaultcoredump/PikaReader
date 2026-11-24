@@ -18,6 +18,7 @@ package org.pikatimer.pikareader.tags;
 
 import org.pikatimer.pikareader.conf.PikaConfig;
 import org.pikatimer.pikareader.http.HTTPHandler;
+import org.pikatimer.pikareader.relay.RelayClient;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -100,7 +101,12 @@ public class TagReadRouter implements Runnable {
                         logger.error("Error sending {} tag reads to the websocket clients", tr.size(), ex);
                     }
 
-                    // if we are uploading to PikaTagRelay, send a copy there too
+                    // queue a copy for PikaRelay (does nothing if sending is off)
+                    try {
+                        RelayClient.getInstance().addReads(tr);
+                    } catch (RuntimeException ex) {
+                        logger.error("Error queuing {} tag reads for PikaRelay", tr.size(), ex);
+                    }
                 } catch (RuntimeException ex) {
                     logger.error("Error routing {} tag reads", tr.size(), ex);
                 }

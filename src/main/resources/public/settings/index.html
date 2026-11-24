@@ -115,6 +115,48 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                 </fieldset>
             </form>
 
+            <!-- Remote (PikaRelay). Saved on its own and applied right away,
+                 so it stays editable while reading. -->
+            <form id="remoteForm" class="mb-3" novalidate onsubmit="saveRemote(event)">
+                <fieldset id="remoteFields" disabled>
+                    <div class="card mb-3">
+                        <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                            <span>Remote (PikaRelay)</span>
+                            <span id="remoteState" class="badge text-bg-secondary">Off</span>
+                        </div>
+                        <div class="card-body row g-3">
+                            <div class="col-12">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="remoteEnabled">
+                                    <label class="form-check-label" for="remoteEnabled">Send reads and status to PikaRelay, and take commands from it</label>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="remoteURL" class="form-label">PikaRelay URL</label>
+                                <input type="url" class="form-control" id="remoteURL" maxlength="2048" placeholder="https://relay.example.com">
+                                <div class="form-text">Where PikaRelay is installed. Add /index.php if the relay's web server doesn't rewrite URLs. Use https.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="remoteKey" class="form-label">API Key</label>
+                                <input type="text" class="form-control" id="remoteKey" maxlength="256" autocomplete="off">
+                                <div class="form-text">A <i>reader</i> key from the relay's Admin page. Leave blank for an insecure relay.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="remoteSecret" class="form-label">API Secret</label>
+                                <input type="password" class="form-control" id="remoteSecret" maxlength="256" autocomplete="new-password">
+                                <div class="form-text" id="remoteSecretHelp">The secret for the key.</div>
+                            </div>
+                            <div class="col-12 small" id="remoteStatus"></div>
+                            <div class="col-12" id="remoteResult"></div>
+                            <div class="col-12 text-center">
+                                <button type="submit" class="btn btn-success px-5" id="remoteSaveButton">Save Remote Settings</button>
+                            </div>
+                            <div class="col-12 form-text text-center">Remote settings take effect right away, even while reading. The Unit ID is this unit's name on the relay.</div>
+                        </div>
+                    </div>
+                </fieldset>
+            </form>
+
             <div class="text-center">
                 <a href="/" class="btn btn-primary btn-lg p-2" role="button">Home</a>
                 <div><hr></div>
@@ -229,6 +271,84 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                 row.querySelector(".reader-ip").focus();
             }
 
+            var remoteSecretSet = false;
+
+            function showRemote(remote, remoteStatus) {
+                if (!remote) {
+                    return;
+                }
+                document.getElementById("remoteEnabled").checked = remote.Enabled;
+                document.getElementById("remoteURL").value = remote.URL;
+                document.getElementById("remoteKey").value = remote.Key;
+                document.getElementById("remoteSecret").value = "";
+                remoteSecretSet = remote.SecretSet;
+                document.getElementById("remoteSecret").placeholder = remoteSecretSet ? "Saved (leave blank to keep it)" : "";
+                document.getElementById("remoteSecretHelp").textContent = remoteSecretSet ?
+                        "A secret is saved. Leave this blank to keep it, or clear the key to remove both." :
+                        "The secret for the key.";
+                document.getElementById("remoteFields").disabled = false;
+                showRemoteStatus(remoteStatus);
+            }
+
+            // The "remote" part of the status: {enabled, connected, pendingReads, lastContactLocal, lastError}
+            function showRemoteStatus(r) {
+                var badge = document.getElementById("remoteState");
+                var line = document.getElementById("remoteStatus");
+                if (!r || !r.enabled) {
+                    badge.className = "badge text-bg-secondary";
+                    badge.textContent = "Off";
+                    line.textContent = "";
+                    return;
+                }
+                var waiting = r.pendingReads + (r.pendingReads === 1 ? " read" : " reads") + " waiting to be sent";
+                var contact = r.lastContactLocal ? "last contact " + r.lastContactLocal.replace("T", " ") : "not reached yet";
+                if (r.connected) {
+                    badge.className = "badge text-bg-success";
+                    badge.textContent = "Connected";
+                    line.textContent = waiting + " · " + contact;
+                } else {
+                    badge.className = "badge text-bg-danger";
+                    badge.textContent = "Not connected";
+                    line.textContent = (r.lastError ? r.lastError + " · " : "") + waiting + " · " + contact;
+                }
+            }
+
+            function saveRemote(event) {
+                event.preventDefault();
+                var remote = {
+                    "Enabled": document.getElementById("remoteEnabled").checked,
+                    "URL": document.getElementById("remoteURL").value.trim(),
+                    "Key": document.getElementById("remoteKey").value.trim(),
+                    "Secret": document.getElementById("remoteSecret").value.trim()
+                };
+                var button = document.getElementById("remoteSaveButton");
+                var result = document.getElementById("remoteResult");
+                button.disabled = true;
+                fetch(base + "/config/remote", {
+                    method: "PUT",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(remote)
+                })
+                        .then((response) => response.json().then((data) => ({ok: response.ok, data: data})))
+                        .then((r) => {
+                            if (r.ok) {
+                                showRemote(r.data.remote, r.data.remoteStatus);
+                                result.innerHTML = '<div class="alert alert-success mb-0" role="alert"><b>Saved</b> at ' +
+                                        escapeHtml(r.data.timestamp) + ".</div>";
+                            } else {
+                                var errors = r.data.errors || [r.data.error || "Unknown error"];
+                                result.innerHTML = '<div class="alert alert-danger mb-0" role="alert"><b>Not saved:</b><ul class="mb-0">' +
+                                        errors.map((e) => "<li>" + escapeHtml(e) + "</li>").join("") + "</ul></div>";
+                            }
+                        })
+                        .catch((error) => {
+                            result.innerHTML = '<div class="alert alert-danger mb-0" role="alert">Unable to save the remote settings: ' + escapeHtml(error) + "</div>";
+                        })
+                        .finally(() => {
+                            button.disabled = false;
+                        });
+            }
+
             function showSettings(data) {
                 choices = data;
                 loaded = data.settings;
@@ -262,7 +382,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                 document.getElementById("result").innerHTML = "";
                 fetch(base + "/config")
                         .then((response) => response.json())
-                        .then(showSettings)
+                        .then((data) => {
+                            showSettings(data);
+                            // Only on load and Revert, so saving the main
+                            // form doesn't wipe unsaved remote changes
+                            showRemote(data.remote, data.remoteStatus);
+                            document.getElementById("remoteResult").innerHTML = "";
+                        })
                         .catch((error) => showResult("danger", "Unable to load the settings: " + escapeHtml(error)));
             }
 
@@ -349,6 +475,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                     if (status.reading !== reading) {
                         setReading(status.reading);
                     }
+                    showRemoteStatus(status.remote);
                     connectionStatus.textContent = "Connected";
                 }
             };

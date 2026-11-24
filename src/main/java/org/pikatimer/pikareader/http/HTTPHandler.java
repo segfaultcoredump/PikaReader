@@ -18,10 +18,12 @@ package org.pikatimer.pikareader.http;
 
 import org.pikatimer.pikareader.conf.BasicSettings;
 import org.pikatimer.pikareader.conf.PikaConfig;
+import org.pikatimer.pikareader.conf.RemoteSettings;
 import org.pikatimer.pikareader.readers.RFIDReader;
 import org.pikatimer.pikareader.readers.ReaderHandler;
 import org.pikatimer.pikareader.readers.profiles.ProfileManager;
 import org.pikatimer.pikareader.readers.profiles.ReaderProfile;
+import org.pikatimer.pikareader.relay.RelayClient;
 import org.pikatimer.pikareader.status.Status;
 import org.pikatimer.pikareader.status.StatusHandler;
 import org.pikatimer.pikareader.tags.ReadFilterSettings;
@@ -41,16 +43,17 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.eclipse.jetty.websocket.api.StatusCode;
 import org.eclipse.jetty.websocket.api.WriteCallback;
@@ -91,6 +94,9 @@ public class HTTPHandler {
     // method pins one of the few carrier threads.)
     private static final int HTTP_MAX_THREADS = 32;
     private static final int HTTP_MIN_THREADS = 4;
+
+    // A /rewind time given as epoch milliseconds (up to 18 digits fits a long)
+    private static final Pattern EPOCH_MS = Pattern.compile("\\d{1,18}");
 
 //    ReaderHandler readerHandler = ReaderHandler.getInstance();
     private static class SingletonHolder {
@@ -233,20 +239,17 @@ public class HTTPHandler {
                 ctx.json(tr.toJSON());
             });
 
-            //TODO: Add the ability to specify the from and to 
-            // in epoc millis. Need to add the getEPOCMillis to the reads :-) 
-            
-            // Rewinds the data. "from" and "to" are in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
+            // Rewinds the data. "from" and "to" are either epoch milliseconds
+            // (an exact range, [from, to)) or ISO_LOCAL_DATE_TIME such as
+            // 2011-12-03T10:15:30 (matched against each read's local time
+            // label, from and to both exclusive)
             javalinApp.get("/rewind/{from}/{to}", ctx -> {
-                LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
-                LocalDateTime toTime = LocalDateTime.parse(ctx.pathParam("to"));
-                writeReads(ctx, rewindReads(fromTime, toTime));
+                rewind(ctx, ctx.pathParam("from"), ctx.pathParam("to"));
             });
 
-            // Rewinds the data. "from" is in ISO_LOCAL_DATE_TIME: 2011-12-03T10:15:30
+            // Rewinds the data from "from" (epoch ms or ISO_LOCAL_DATE_TIME) on
             javalinApp.get("/rewind/{from}", ctx -> {
-                LocalDateTime fromTime = LocalDateTime.parse(ctx.pathParam("from"));
-                writeReads(ctx, rewindReads(fromTime, null));
+                rewind(ctx, ctx.pathParam("from"), null);
             });
 
             javalinApp.get("/rewind", ctx -> {
@@ -323,7 +326,8 @@ public class HTTPHandler {
                     ctx.status(400).json(response.toString());
                     return;
                 }
-                List<String> errors = BasicSettings.validate(settings, BasicSettings.read(pikaConfig), readerHandler.getReaderTypes());
+                List<String> errors = BasicSettings.validate(settings, BasicSettings.read(pikaConfig), readerHandler.getReaderTypes(),
+                        RemoteSettings.isEnabled(remoteRoot()));
                 if (!errors.isEmpty()) {
                     logger.info("Settings not saved: {}", errors);
                     response.put("errors", errors);
@@ -338,7 +342,37 @@ public class HTTPHandler {
                 ctx.json(response.toString());
             });
 
-            // TODO: Uploader config page
+            // Save the PikaRelay settings. They take effect right away and
+            // may be changed while reading.
+            javalinApp.put("/config/remote", ctx -> {
+                logger.info("HTTPD Request: PUT /config/remote");
+                JSONObject response = new JSONObject();
+                JSONObject remote;
+                try {
+                    remote = new JSONObject(ctx.body());
+                } catch (JSONException ex) {
+                    response.put("errors", new JSONArray().put("The settings aren't valid JSON: " + ex.getMessage()));
+                    ctx.status(400).json(response.toString());
+                    return;
+                }
+                List<String> errors = RemoteSettings.validate(remote, RemoteSettings.read(pikaConfig), pikaConfig.getStringValue("UnitID"));
+                if (!errors.isEmpty()) {
+                    logger.info("PikaRelay settings not saved: {}", errors);
+                    response.put("errors", errors);
+                    ctx.status(400).json(response.toString());
+                    return;
+                }
+                pikaConfig.editLive(root -> RemoteSettings.apply(root, remote));
+                RelayClient relay = RelayClient.getInstance();
+                relay.reloadSettings();
+                logger.info("PikaRelay settings saved from the web UI");
+                response.put("remote", RemoteSettings.read(pikaConfig));
+                response.put("remoteStatus", relay.statusJSON());
+                response.put("saved", true);
+                response.put("timestamp", LocalDateTime.now(pikaConfig.getTimezoneId()).format(formatter));
+                ctx.json(response.toString());
+            });
+
             // TODO: Status ws for folks who don't care about the reads
             
             // Start the javalin server
@@ -365,7 +399,14 @@ public class HTTPHandler {
         response.put("gatingStyles", BasicSettings.gatingStyles());
         response.put("reading", ReaderHandler.getInstance().isReading());
         response.put("restartPending", pikaConfig.isRestartPending());
+        response.put("remote", RemoteSettings.read(pikaConfig));
+        response.put("remoteStatus", RelayClient.getInstance().statusJSON());
         return response;
+    }
+
+    /** The config's [Remote] section, as a root object for RemoteSettings. */
+    private static JSONObject remoteRoot() {
+        return new JSONObject().put(RemoteSettings.REMOTE, pikaConfig.getKeyCopy(RemoteSettings.REMOTE));
     }
 
     private JSONObject currentProfile() {
@@ -449,30 +490,42 @@ public class HTTPHandler {
 
 
     /**
-     * The reads for a rewind. Today's reads come from memory; anything before
-     * the start of today is read from disk.
-     *
-     * @param fromTime start of range (exclusive)
-     * @param toTime end of range (exclusive), or null for open-ended
+     * Answer a /rewind/{from}[/{to}]. Digits only means epoch milliseconds,
+     * for [from, to); anything else is an ISO local date-time, matched
+     * against the reads' local time labels as before. Both must use the same
+     * form. Bad input gets a 400.
      */
-    private List<TagRead> rewindReads(LocalDateTime fromTime, LocalDateTime toTime) {
-        List<TagRead> reads = new ArrayList<>();
-        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
-
-        // Historical portion: anything before today
-        if (fromTime.isBefore(todayStart)) {
-            LocalDateTime histTo = (toTime == null || toTime.isAfter(todayStart)) ? todayStart : toTime;
-            reads.addAll(TagDB.getInstance().getReadsBetween(fromTime, histTo));
+    private static void rewind(Context ctx, String from, String to) throws IOException {
+        boolean epoch = EPOCH_MS.matcher(from).matches();
+        if (to != null && epoch != EPOCH_MS.matcher(to).matches()) {
+            rewindError(ctx, "Use the same form for from and to: both epoch milliseconds or both local date-times such as 2026-11-24T08:00:00");
+            return;
         }
-
-        // Today's portion: from memory
-        TagDB.getInstance().getReads().stream().filter(Objects::nonNull).sorted().forEach(read -> {
-            LocalDateTime ts = read.getTimestamp();
-            if (!ts.isBefore(todayStart) && fromTime.isBefore(ts) && (toTime == null || toTime.isAfter(ts))) {
-                reads.add(read);
+        if (epoch) {
+            long fromMs = Long.parseLong(from);
+            long toMs = to == null ? Long.MAX_VALUE : Long.parseLong(to);
+            if (toMs <= fromMs) {
+                rewindError(ctx, "The end of the range (" + to + ") must be after the start (" + from + ")");
+                return;
             }
-        });
-        return reads;
+            writeReads(ctx, TagDB.getInstance().getReadsBetween(fromMs, toMs));
+            return;
+        }
+        LocalDateTime fromTime;
+        LocalDateTime toTime;
+        try {
+            fromTime = LocalDateTime.parse(from);
+            toTime = to == null ? null : LocalDateTime.parse(to);
+        } catch (DateTimeParseException ex) {
+            rewindError(ctx, "Unable to read the time '" + ex.getParsedString() + "'. Use epoch milliseconds or a local date-time such as 2026-11-24T08:00:00");
+            return;
+        }
+        writeReads(ctx, TagDB.getInstance().getRewindReads(fromTime, toTime));
+    }
+
+    private static void rewindError(Context ctx, String message) {
+        logger.info("Bad rewind request {}: {}", ctx.path(), message);
+        ctx.status(400).json(new JSONObject().put("error", message).toString());
     }
 
     /**

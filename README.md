@@ -24,6 +24,7 @@ This allows for remote and offline readers for on-course splits or remote starti
 * Antenna Status Display via web UI.
 * Support for both Decimal and Hex encoded tags.
 * Support for a "trigger" that can be used to drop a special "0" chip read to use to mark the start of a race. 
+* Sending reads and status to a [PikaRelay](#pikarelay) server, which can also send the unit commands (start, rewind, change profile), for readers with no direct network path to the timing application.
 
 ## Additional Notes
 * Use the [PikaDownloader](https://github.com/PikaTimer/PikaDownloader/) app to download data from the reader to a local text file.
@@ -31,7 +32,6 @@ This allows for remote and offline readers for on-course splits or remote starti
 
 ## Planned 
 * Integration with PikaTimer application 
-* Integration with PikaRelay for remote retrieval of data
 * Support for UART based readers (TSL and ThingMagic/Jadak )
 * Web Based configuration tool
 
@@ -65,8 +65,11 @@ REST api paths:
 - `/start` -- Start the reader
 - `/stop` -- Stop the reader
 - `/rewind` -- rewind all of today's data from PikaReader (current day, local time)
-- `/rewind/<from>` -- Rewind all data after <from> date/time (reads stored history from disk if <from> is before today). Time in ISO format (YYYY-MM-DDTHH:MM:ss)
-- `/rewind/<from>/<to>` -- Rewind data between from and to
+- `/rewind/<from>` -- Rewind all data from <from> on (stored history is read from disk). <from> is epoch milliseconds or a local date/time in ISO format (YYYY-MM-DDTHH:MM:ss)
+- `/rewind/<from>/<to>` -- Rewind data between from and to. Both must use the same form:
+    - Epoch milliseconds (e.g. `/rewind/1795950000000/1795960000000`): the reads taken in `[from, to)`, exact even when daylight saving or the Timezone setting changed during the range. Use this form for anything that must not miss or double a read.
+    - ISO local date/time: the reads whose local time label is strictly between from and to. In the repeated hour when daylight saving ends, both passes match.
+    - A bad time, mixed forms, or an epoch `to` that isn't after `from` returns `400` with an `error`.
 - `/debug` -- Dump the debug log to the browser
 - `/trigger` -- Record a "trigger" time (chip = 0, reader = 0, antenna = 0) to mark an event
 - `/status` -- dump the current reader status
@@ -75,10 +78,31 @@ REST api paths:
 - `PUT /profile/<profile>` -- change the reader profile, by id or name (e.g. `curl -X PUT http://<pikareader>:8080/profile/start_mats`). Returns `409` while the readers are reading and `404` for an unknown profile.
 - `/config` -- the basic settings the Settings page edits, and the choices for each one
 - `PUT /config` -- save the basic settings (a JSON body like the `settings` from `/config`). Returns `400` with a list of `errors` for a bad setting and `409` while the readers are reading. The changes take effect when PikaReader restarts.
+- `PUT /config/remote` -- save the PikaRelay settings (`{"Enabled": true, "URL": "...", "Key": "...", "Secret": "..."}`; a blank `Secret` keeps the saved one). Allowed while reading, and takes effect right away. Returns `400` with a list of `errors` for a bad setting.
 
 Websocket (ws://)
 - `/status` -- sends a message once a second with the current reader status
 - `/events` -- send a message for each read or status update
+
+## PikaRelay
+[PikaRelay](https://github.com/PikaTimer/PikaRelay/) is a small web relay. A PikaReader with internet access sends its reads and status there, and PikaDownloader picks them up from anywhere, with no direct network path to the reader.
+
+Turn it on in the Remote (PikaRelay) card on the Settings page, or in the `[Remote]` section of the config file:
+
+```toml
+[Remote]
+Enabled = true
+URL = "https://relay.example.com"   # add /index.php if the relay doesn't rewrite URLs
+Key = "..."                          # a "reader" key from the relay's Admin page (secure mode)
+Secret = "..."                       # leave Key and Secret blank for an insecure relay
+```
+
+The remote settings take effect right away, even while reading. The `UnitID` is the unit's name on the relay. It may only contain letters, digits, `.`, `_` and `-`.
+
+- Every 5 seconds PikaReader sends its status (the same JSON as `/status`), checks for commands, and uploads the new reads.
+- While the relay can't be reached, reads are queued in memory and sent once it is back. The queue is not kept when PikaReader stops; send a rewind from PikaDownloader for anything missed.
+- Commands from the relay: `start` (start reading), `rewind` (upload all the stored reads in the range, including any sent before; the relay skips the ones it has), `setProfile` (only while stopped), and `forceSetProfile` (stops the readers, changes the profile, and starts them again if they were reading). There is no remote stop.
+- The Settings page and the `remote` part of `/status` show whether the relay is connected, how many reads are waiting, and the last error.
 
 ## Reader Profiles
 A profile optimizes the reader configuration for a particular situation (start, finish, side panels, etc).  Pick one from the Reader Profile list in the web UI (you'll be asked to confirm) or with `PUT /profile/<profile>`. The profile can only be changed while the readers are stopped. The choice is saved in `.PikaReaderState.toml` (next to the config file), so it is kept across restarts.

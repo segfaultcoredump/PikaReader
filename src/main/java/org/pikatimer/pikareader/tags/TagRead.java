@@ -21,6 +21,7 @@ import java.io.Writer;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import org.json.JSONObject;
 
 /**
@@ -160,10 +161,21 @@ public class TagRead implements Comparable<TagRead> {
         epochMilli = o.optLong("epochMilli");
     }
 
+    /**
+     * Orders reads by when they were taken (epochMilli; a missing one counts
+     * as 0), then by timestamp label. Sorting by the label alone would put
+     * reads out of order across a daylight saving change or a Timezone change.
+     */
     @Override
     public int compareTo(TagRead other) {
-        return this.timestamp.compareTo(other.timestamp);
+        int c = Long.compare(epochMilli == null ? 0 : epochMilli, other.epochMilli == null ? 0 : other.epochMilli);
+        if (c != 0) {
+            return c;
+        }
+        return LABEL_ORDER.compare(timestamp, other.timestamp);
     }
+
+    private static final Comparator<LocalDateTime> LABEL_ORDER = Comparator.nullsFirst(Comparator.naturalOrder());
 
     public void setEpochMilli(Long epochMilli) {
         this.epochMilli = epochMilli;

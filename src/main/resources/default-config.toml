@@ -34,6 +34,19 @@ Port = 8080
 # the first run: ~/.PikaReader, or the -DDB=<path> setting.
 Retention = 180
 
+# Send reads and status to a PikaRelay server every 5 seconds and take
+# commands (start, rewind, change profile) from it. Can also be set on the
+# Settings page, where changes take effect right away.
+[Remote]
+Enabled = false
+# Where PikaRelay is installed, e.g. "https://relay.example.com", or
+# "https://example.com/relay/index.php" if its web server doesn't rewrite URLs.
+URL = ""
+# A reader API key and its secret from the relay's Admin page (secure mode).
+# Leave both blank for an insecure relay.
+Key = ""
+Secret = ""
+
 # Add one [[Reader.Readers]] section per reader, each with a unique Index.
 # Type is IMPINJ or ZEBRA. Everything except Index, Type and IP is optional.
 # The reader profile (start_mats, finish_mats, ...) is picked in the web UI

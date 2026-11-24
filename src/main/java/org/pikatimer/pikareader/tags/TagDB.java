@@ -29,16 +29,17 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Stream;
-import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,9 +63,19 @@ public class TagDB {
     // Serializes file writes between the DB thread and flush()
     private final Object writeLock = new Object();
 
+    // The zone the DB folders are named in: the system timezone, which can
+    // differ from the configured Timezone that read timestamps use
+    private final ZoneId dirZone = ZoneId.systemDefault();
+    // Start of the startup day (epoch ms). Every read with epochMilli from
+    // here on is in tagList: today's files are loaded at startup and every
+    // read since is added. Rewinds take older reads from disk.
+    private final long memoryFrom;
+    // Counted down once today's files are in tagList
+    private final CountDownLatch loaded = new CountDownLatch(1);
+    private static final long LOAD_WAIT_SECONDS = 60;
+
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("/yyyy/MM/dd/HH/HH-mm-ss.SSS'.dat'");
     private static final DateTimeFormatter dayDirFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd");
-    private static final DateTimeFormatter hourDirFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd/HH");
 
     /**
      * SingletonHolder is loaded on the first execution of
@@ -105,23 +116,30 @@ public class TagDB {
             logger.error("Unable to create database directory {}", dbPath.toAbsolutePath());
         }
 
+        LocalDate today = LocalDate.now(dirZone);
+        memoryFrom = today.atStartOfDay(dirZone).toInstant().toEpochMilli();
+
         Thread t = new Thread(() -> {
 
             Instant start = Instant.now();
-            // Only load today's reads (local timezone). Older reads are
-            // fetched from disk on demand via getReadsBetween()
-            Path todayPath = dbPath.resolve(LocalDate.now().format(dayDirFormatter));
-            if (Files.isDirectory(todayPath)) {
-                try (Stream<Path> walk = Files.walk(todayPath)) {
-                    walk.filter(Files::isRegularFile).forEach(f -> {
-                        List<TagRead> reads = readFile(f);
-                        synchronized (tagList) {
-                            tagList.addAll(reads);
-                        }
-                    });
-                } catch (IOException ex) {
-                    logger.error("Error reading DB at {}", todayPath.toAbsolutePath().toString(), ex);
+            // Only load today's reads (the folders' timezone). Older reads
+            // are fetched from disk on demand for a rewind
+            Path todayPath = dbPath.resolve(today.format(dayDirFormatter));
+            try {
+                if (Files.isDirectory(todayPath)) {
+                    try (Stream<Path> walk = Files.walk(todayPath)) {
+                        walk.filter(Files::isRegularFile).sorted().forEach(f -> {
+                            List<TagRead> reads = TagFiles.readFile(f);
+                            synchronized (tagList) {
+                                tagList.addAll(reads);
+                            }
+                        });
+                    } catch (IOException ex) {
+                        logger.error("Error reading DB at {}", todayPath.toAbsolutePath().toString(), ex);
+                    }
                 }
+            } finally {
+                loaded.countDown();
             }
             Instant end = Instant.now();
             Duration elapsed = Duration.between(start, end);
@@ -161,62 +179,49 @@ public class TagDB {
         logger.info("TagDB Processing Thread started.");
     }
 
-    private List<TagRead> readFile(Path f) {
-        List<TagRead> reads = new ArrayList<>();
-        try (Stream<String> lines = Files.lines(f)) {
-            lines.forEach(s -> {
-                try {
-                    reads.add(new TagRead(new JSONObject(s)));
-                } catch (JSONException ex) {
-                    logger.error("Error parsing {} in file at {}", s, f.toAbsolutePath().toString());
-                }
-            });
-        } catch (Exception ex) {
-            logger.error("Error reading file at {}", f.toAbsolutePath().toString(), ex);
-        }
-        return reads;
+    /**
+     * The reads with epochMilli in [fromMs, toMs), sorted by time. Exact
+     * whatever the local time did in between (daylight saving, a changed
+     * Timezone setting). Reads from the startup day on come from memory, older
+     * ones from disk.
+     *
+     * @param fromMs start of range, epoch ms (inclusive)
+     * @param toMs end of range, epoch ms (exclusive); Long.MAX_VALUE for no end
+     */
+    public List<TagRead> getReadsBetween(long fromMs, long toMs) {
+        awaitLoaded();
+        return TagFiles.between(dbPath, dirZone, memoryFrom, this::forEachInMemory, fromMs, toMs);
     }
 
     /**
-     * Reads tag reads from the files on disk (not the in-memory list) whose
-     * timestamps fall strictly between from and to.
+     * The reads whose timestamp label (the local time in the configured
+     * Timezone when each was read) is strictly between from and to, sorted
+     * by time. Use getReadsBetween(long, long) for an exact range.
      *
-     * @param from start of range (exclusive)
-     * @param to end of range (exclusive), or null to read through now
-     * @return the matching reads sorted by timestamp
+     * @param fromTime start of range (exclusive)
+     * @param toTime end of range (exclusive), or null for open-ended
      */
-    public List<TagRead> getReadsBetween(LocalDateTime from, LocalDateTime to) {
-        LocalDateTime end = (to == null) ? LocalDateTime.now() : to;
-        List<TagRead> result = new ArrayList<>();
+    public List<TagRead> getRewindReads(LocalDateTime fromTime, LocalDateTime toTime) {
+        awaitLoaded();
+        return TagFiles.betweenLabels(dbPath, dirZone, memoryFrom, this::forEachInMemory,
+                fromTime, toTime, pikaConfig.getTimezoneId(), System.currentTimeMillis());
+    }
 
-        // Start one hour early since a file is named when it is written, which
-        // can be just after the hour rollover for reads taken before it.
-        LocalDateTime hour = from.truncatedTo(ChronoUnit.HOURS).minusHours(1);
-        while (!hour.isAfter(end)) {
-            // skip the whole day if there is no directory for it
-            if (!Files.isDirectory(dbPath.resolve(hour.format(dayDirFormatter)))) {
-                hour = hour.toLocalDate().plusDays(1).atStartOfDay();
-                continue;
-            }
-            Path hourPath = dbPath.resolve(hour.format(hourDirFormatter));
-            if (Files.isDirectory(hourPath)) {
-                try (Stream<Path> files = Files.list(hourPath)) {
-                    files.filter(Files::isRegularFile).forEach(f -> {
-                        for (TagRead r : readFile(f)) {
-                            LocalDateTime ts = r.getTimestamp();
-                            if (ts != null && from.isBefore(ts) && end.isAfter(ts)) {
-                                result.add(r);
-                            }
-                        }
-                    });
-                } catch (IOException ex) {
-                    logger.error("Error reading DB at {}", hourPath.toAbsolutePath().toString(), ex);
-                }
-            }
-            hour = hour.plusHours(1);
+    private void forEachInMemory(Consumer<TagRead> action) {
+        synchronized (tagList) {
+            tagList.forEach(action);
         }
-        Collections.sort(result);
-        return result;
+    }
+
+    // A rewind right after startup must not miss today's reads still loading
+    private void awaitLoaded() {
+        try {
+            if (!loaded.await(LOAD_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                logger.warn("Today's reads are still loading; the rewind may be missing some");
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public Collection<TagRead> getReads() {
@@ -255,7 +260,7 @@ public class TagDB {
         reads.forEach(read -> data.append(read.toJSON()).append(System.lineSeparator()));
 
         synchronized (writeLock) {
-            File outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
+            File outputFile = new File(dbPath.toString() + LocalDateTime.now(dirZone).format(formatter));
             // Two writes in the same millisecond (flush() racing the DB thread)
             // must not overwrite each other
             while (outputFile.exists()) {
@@ -265,7 +270,7 @@ public class TagDB {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                outputFile = new File(dbPath.toString() + LocalDateTime.now().format(formatter));
+                outputFile = new File(dbPath.toString() + LocalDateTime.now(dirZone).format(formatter));
             }
 
             logger.trace("Writing {} tag reads to {}", reads.size(), outputFile.getAbsolutePath());

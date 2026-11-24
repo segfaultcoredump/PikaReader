@@ -20,14 +20,10 @@
 
 
 ## v1.1 PikaRelay Support
-- Send reads to relay server
-- Rewind
-- Start Reader
-- Status updates
+- Validate against a live PikaRelay install (secure mode, a long outage, a multi-day rewind on a Pi)
 
 ## v1.2 Web Config
 - On-Disk Cleanup of old reads
-- Upload URL, enable/disable
 - Basic Reader config
     - Add/remove
     - Set IP / port
